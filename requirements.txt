@@ -1,0 +1,20 @@
+# ====================================================================
+# requirements.txt — Dependency Vision-to-Audio Bridge
+# ====================================================================
+# Instalasi: pip install -r requirements.txt
+#
+# Python yang direkomendasikan: 3.9 – 3.11
+# (pyttsx3 belum sepenuhnya stabil di Python 3.12 pada beberapa OS)
+# ====================================================================
+
+# OpenCV — pemrosesan citra (Grayscale, HSV, Canny, Morfologi, GUI)
+# Gunakan opencv-python-headless jika tidak memerlukan GUI (server/CI)
+opencv-python>=4.8.0
+
+# NumPy — operasi array multidimensi dan mask piksel
+numpy>=1.24.0
+
+# pyttsx3 — text-to-speech offline lintas platform (Windows/Linux/macOS)
+# Di Linux membutuhkan: sudo apt install espeak libespeak1
+# Di macOS sudah tersedia via NSSpeechSynthesizer (tidak perlu install ekstra)
+pyttsx3>=2.90
