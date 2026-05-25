@@ -71,23 +71,22 @@ def hitung_skor_warna(hsv_roi: np.ndarray, nominal: dict) -> tuple[float, float]
 def tentukan_nominal(roi: np.ndarray) -> str:
     """
     Menentukan nominal uang yang paling mungkin dari sebuah ROI BGR.
+    Dioptimalkan dengan Filter Anti-Ambiguitas Khusus 20rb, 50rb, dan 100rb.
 
     Alur logika:
         1. Konversi ROI ke HSV
         2. Hitung skor warna untuk setiap nominal
-        3. Urutkan nominal dari skor tertinggi ke terendah
-        4. Periksa persentase pemenang >= PERSENTASE_THRESHOLD
-        5. Periksa selisih skor pemenang dan runner-up >= SKOR_DIFF_THRESHOLD
-        6. Kembalikan nama nominal, "Tidak terdeteksi", atau "Tidak yakin"
+        3. Terapkan Penalti Lintas Warna (Cross-Color Penalty) untuk menekan false positive
+        4. Urutkan nominal dari skor tertinggi ke terendah
+        5. Periksa persentase pemenang >= PERSENTASE_THRESHOLD
+        6. Periksa selisih skor pemenang dan runner-up >= SKOR_DIFF_THRESHOLD
+        7. Kembalikan nama nominal, "Tidak terdeteksi", atau "Tidak yakin"
 
     Parameter:
         roi : numpy array BGR (hasil crop dari roi_detector.py)
 
     Mengembalikan:
-        str — salah satu dari:
-            • "Rp100.000" / "Rp50.000" / ... (nominal terdeteksi)
-            • "Tidak terdeteksi" (warna tidak cukup dominan)
-            • "Tidak yakin"      (dua nominal terlalu mirip skornya)
+        str — salah satu dari nominal terdeteksi, "Tidak terdeteksi", atau "Tidak yakin"
     """
 
     # Pastikan ROI tidak kosong sebelum diproses
@@ -95,14 +94,15 @@ def tentukan_nominal(roi: np.ndarray) -> str:
         return "Tidak terdeteksi"
 
     # ---- Langkah 1: Konversi BGR → HSV ----------------------------------- #
-    # HSV lebih stabil terhadap variasi pencahayaan dibanding BGR murni.
     hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
     # ---- Langkah 2: Hitung skor setiap nominal ---------------------------- #
-    hasil_skor = []   # List of (nama_nominal, persentase, skor_bobot)
+    hasil_skor = []
+    mentah = {}  # Menyimpan persentase murni untuk analisis lintas warna
 
     for nominal in config.NOMINAL_HSV:
         persentase, skor_bobot = hitung_skor_warna(hsv_roi, nominal)
+        mentah[nominal["nama"]] = persentase
         hasil_skor.append({
             "nama"       : nominal["nama"],
             "suara"      : nominal["suara"],
@@ -110,28 +110,42 @@ def tentukan_nominal(roi: np.ndarray) -> str:
             "skor"       : skor_bobot,
         })
 
-    # ---- Langkah 3: Urutkan dari skor tertinggi ke terendah -------------- #
+    # ---- LANGKAH 3: FILTER PENALTI LINTAS WARNA (ANTI-OVERLAP) ------------ #
+    # Mengatasi perebutan skor dominan antara pecahan pekat (20rb, 50rb, dan 100rb)
+    for item in hasil_skor:
+        # A. Reduksi Ambiguitas 20rb vs 50rb (Hijau vs Biru/Teal)
+        # Jika warna hijau murni (20rb) terhitung di atas 10%, potong skor 50rb agar tidak membingungkan sistem
+        if item["nama"] == "Rp50.000" and mentah.get("Rp20.000", 0) > 10.0:
+            item["skor"] *= 0.65  # Beri penalti 35% pada warna biru
+            
+        if item["nama"] == "Rp20.000" and mentah.get("Rp50.000", 0) > 15.0:
+            item["skor"] *= 0.70  # Beri penalti 30% pada warna hijau
+
+        # B. Reduksi Ambiguitas Kulit Tangan / Cahaya Lampu Hangat (Kasus 100rb)
+        # Jika sebaran warna merah tipis, besar kemungkinan itu noise background atau kulit.
+        # Uang 100rb asli yang dominan merah pekat pasti menghasilkan persentase di atas 22%.
+        if item["nama"] == "Rp100.000" and item["persentase"] < 22.0:
+            item["skor"] *= 0.40  # Beri penalti besar jika warna merah setengah-setengah
+
+    # ---- Langkah 4: Urutkan dari skor tertinggi ke terendah -------------- #
     hasil_skor.sort(key=lambda x: x["skor"], reverse=True)
 
     # Ambil peringkat 1 (pemenang) dan peringkat 2 (runner-up)
     peringkat_1 = hasil_skor[0]
     peringkat_2 = hasil_skor[1] if len(hasil_skor) > 1 else {"skor": 0.0}
 
-    # ---- Langkah 4: Cek threshold persentase ----------------------------- #
-    # Jika pemenang tidak mencapai persentase minimum, tidak ada warna
-    # yang cukup dominan → tidak ada uang yang terdeteksi.
+    # ---- Langkah 5: Cek threshold persentase ----------------------------- #
     if peringkat_1["persentase"] < config.PERSENTASE_THRESHOLD:
         return "Tidak terdeteksi"
 
-    # ---- Langkah 5: Cek selisih skor (anti-ambiguitas) ------------------- #
-    # Jika skor pemenang dan runner-up terlalu berdekatan, deteksi tidak
-    # bisa dipercaya — mungkin warna sedang ambigu atau pencahayaan tidak
-    # sempurna.
+    # ---- Langkah 6: Cek selisih skor (anti-ambiguitas) ------------------- #
     selisih_skor = peringkat_1["skor"] - peringkat_2["skor"]
     if selisih_skor < config.SKOR_DIFF_THRESHOLD:
+        # Jika skornya setelah dipenalti masih bersaing ketat, kembalikan "Tidak yakin" 
+        # agar keputusan diserahkan sepenuhnya ke modul Template Matching Anda!
         return "Tidak yakin"
 
-    # ---- Langkah 6: Kembalikan nama nominal pemenang --------------------- #
+    # ---- Langkah 7: Kembalikan nama nominal pemenang --------------------- #
     return peringkat_1["nama"]
 
 
@@ -151,4 +165,4 @@ def ambil_label_suara(nama_nominal: str) -> str:
     for nominal in config.NOMINAL_HSV:
         if nominal["nama"] == nama_nominal:
             return nominal["suara"]
-    return nama_nominal   # fallback: bacakan nama apa adanya
+    return nama_nominal  # fallback: bacakan nama apa adanya
