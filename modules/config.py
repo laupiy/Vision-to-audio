@@ -5,8 +5,10 @@ config.py — Konfigurasi Global Vision-to-Audio Bridge
 Semua konstanta numerik dan definisi warna HSV disentralisasi
 di sini agar mudah dikalibrasi tanpa menyentuh logika utama.
 
-Versi v5 tambahan:
-  - TAMPILKAN_INFO_HYBRID : toggle tampilan debug HSV vs Template
+Versi perbaikan:
+  - Rp20.000 dibuat lebih mudah terdeteksi saat warna hijau pucat/redup
+  - Rp2.000 dibuat lebih sulit menang karena abu-abu sering false positive
+  - Ditambahkan parameter preprocessing dan template threshold
 ====================================================================
 """
 
@@ -16,166 +18,192 @@ import numpy as np
 #  DIMENSI FRAME KAMERA                                              #
 # ------------------------------------------------------------------ #
 
-# Lebar frame yang diambil dari kamera (piksel)
 FRAME_WIDTH  = 640
-
-# Tinggi frame yang diambil dari kamera (piksel)
 FRAME_HEIGHT = 480
 
 # ------------------------------------------------------------------ #
-#  PARAMETER DETEKSI ROI (REGION OF INTEREST)                        #
+#  PARAMETER DETEKSI ROI                                             #
 # ------------------------------------------------------------------ #
 
-# Aspek rasio minimum bounding box kontur uang (lebar / tinggi)
 ASPEK_RASIO_MIN = 1.25
-
-# Aspek rasio maksimum; di atas ini dianggap bukan uang
 ASPEK_RASIO_MAX = 3.8
 
-# Luas bounding box minimum (piksel persegi)
 LUAS_ROI_MIN = 6_000
-
-# Luas bounding box maksimum (piksel persegi)
 LUAS_ROI_MAX = 220_000
-
 
 # ------------------------------------------------------------------ #
 #  PARAMETER ROI GUIDE / MANUAL                                      #
 # ------------------------------------------------------------------ #
 
-# Rasio posisi kotak panduan terhadap dimensi frame
 GUIDE_X_RATIO = 0.08
 GUIDE_Y_RATIO = 0.26
 GUIDE_W_RATIO = 0.84
 GUIDE_H_RATIO = 0.48
 
-# Validasi tekstur/variasi warna di mode GUIDE.
-# False = lebih longgar (cocok untuk demo/ujian dengan kamera laptop).
-# True  = lebih ketat (cocok jika background dan cahaya sudah terkontrol).
+# Untuk demo, biarkan False agar uang asli tidak gampang ditolak
 VALIDASI_KETAT_GUIDE = False
+
+# ------------------------------------------------------------------ #
+#  PARAMETER PREPROCESSING                                           #
+# ------------------------------------------------------------------ #
+
+# Aktifkan preprocessing agar citra lebih stabil terhadap pencahayaan
+GUNAKAN_PREPROCESSING = True
+
+# Gamma > 1 membantu mencerahkan gambar yang redup
+GAMMA_VALUE = 1.25
+
+# Saturation boost membantu warna uang yang pucat agar lebih terlihat
+SATURATION_BOOST = 1.25
+
+# CLAHE untuk memperbaiki kontras pencahayaan
+CLAHE_CLIP_LIMIT = 2.0
+CLAHE_TILE_GRID_SIZE = (8, 8)
 
 # ------------------------------------------------------------------ #
 #  PARAMETER AKURASI KEPUTUSAN WARNA                                 #
 # ------------------------------------------------------------------ #
 
-# Ambang persentase warna minimum (%)
-PERSENTASE_THRESHOLD = 5.0
+# Dibuat sedikit lebih rendah agar uang dengan warna pucat tetap bisa terbaca
+PERSENTASE_THRESHOLD = 4.0
 
-# Selisih skor minimum antara peringkat-1 dan peringkat-2
-SKOR_DIFF_THRESHOLD = 1.5
+# Jika selisih skor terlalu kecil, hasil dianggap tidak yakin
+SKOR_DIFF_THRESHOLD = 1.2
 
 # ------------------------------------------------------------------ #
 #  PARAMETER KONDISI CAHAYA                                          #
 # ------------------------------------------------------------------ #
 
-# Rata-rata nilai V (kecerahan) minimum pada HSV agar cahaya dianggap cukup
-V_LIGHTING_THRESHOLD = 45.0
+# Jangan terlalu tinggi, karena nanti kondisi ruangan biasa dianggap gelap
+V_LIGHTING_THRESHOLD = 40.0
 
 # ------------------------------------------------------------------ #
-#  PARAMETER SUARA (TEXT-TO-SPEECH)                                  #
+#  PARAMETER TEMPLATE MATCHING                                       #
 # ------------------------------------------------------------------ #
 
-# Jeda minimal (detik) antara dua pembacaan nominal berturut-turut
+# Template kuat baru boleh mengalahkan HSV
+TEMPLATE_THRESHOLD_KUAT = 0.78
+
+# Template sedang hanya dipakai untuk membantu, bukan langsung menang
+TEMPLATE_THRESHOLD_SEDANG = 0.68
+
+# Khusus koreksi HSV Rp2.000 yang sering false positive
+TEMPLATE_THRESHOLD_KOREKSI_2000 = 0.72
+
+# ------------------------------------------------------------------ #
+#  PARAMETER SUARA                                                   #
+# ------------------------------------------------------------------ #
+
 COOLDOWN_SUARA = 2.0
 
 # ------------------------------------------------------------------ #
-#  TAMPILAN DEBUG HYBRID (HSV vs Template)                           #
+#  TAMPILAN DEBUG HYBRID                                             #
 # ------------------------------------------------------------------ #
 
-# Jika True, tampilkan baris info HSV / Template / Sumber di layar.
-# Berguna saat demo ke dosen untuk menjelaskan cara kerja sistem.
-# Tekan H saat program berjalan untuk toggle on/off.
 TAMPILKAN_INFO_HYBRID = True
 
 # ------------------------------------------------------------------ #
-#  DEFINISI RANGE WARNA HSV UNTUK SETIAP NOMINAL RUPIAH             #
+#  DEFINISI RANGE WARNA HSV UNTUK SETIAP NOMINAL RUPIAH              #
 # ------------------------------------------------------------------ #
 #
-# Format setiap entry dictionary:
-#   "nama"   : Label teks yang ditampilkan di layar
-#   "suara"  : Teks yang dibacakan oleh TTS
-#   "bobot"  : Faktor pengali skor
-#   "lower1" : Array HSV batas bawah range utama
-#   "upper1" : Array HSV batas atas range utama
-#   "lower2" : Array HSV batas bawah range kedua (opsional, untuk merah)
-#   "upper2" : Array HSV batas atas range kedua (opsional, untuk merah)
+# Catatan:
+# H = 0–179
+# S = 0–255
+# V = 0–255
 #
-# Catatan teknis HSV di OpenCV:
-#   H  : 0 – 179
-#   S  : 0 – 255
-#   V  : 0 – 255
-#
-# Merah memerlukan DUA range karena H merah "melingkari" 0°/180°.
+# Perbaikan utama:
+# - Rp20.000: S minimum diturunkan agar hijau pucat tetap masuk
+# - Rp2.000 : S maksimum diperkecil dan bobot diturunkan agar tidak mudah menang
+# ------------------------------------------------------------------ #
 
 NOMINAL_HSV = [
     {
-        # ---- Rp100.000 — Dominan Merah/Pink ----
+        # ---- Rp100.000 — Merah / Pink ----
         "nama"  : "Rp100.000",
         "suara" : "Seratus ribu rupiah",
-        "bobot" : 1.3,
-        "lower1": np.array([0,   80,  80],  dtype=np.uint8),
-        "upper1": np.array([10,  255, 255], dtype=np.uint8),
-        "lower2": np.array([160, 80,  80],  dtype=np.uint8),
+        "bobot" : 1.25,
+
+        "lower1": np.array([0,   60,  55], dtype=np.uint8),
+        "upper1": np.array([12, 255, 255], dtype=np.uint8),
+
+        "lower2": np.array([155, 60,  55], dtype=np.uint8),
         "upper2": np.array([179, 255, 255], dtype=np.uint8),
     },
     {
-        # ---- Rp50.000 — Dominan Biru ----
+        # ---- Rp50.000 — Biru ----
         "nama"  : "Rp50.000",
         "suara" : "Lima puluh ribu rupiah",
-        "bobot" : 1.0,
-        "lower1": np.array([100, 80,  80],  dtype=np.uint8),
-        "upper1": np.array([130, 255, 255], dtype=np.uint8),
+        "bobot" : 1.05,
+
+        "lower1": np.array([95,  50,  45], dtype=np.uint8),
+        "upper1": np.array([132, 255, 255], dtype=np.uint8),
+
         "lower2": None,
         "upper2": None,
     },
     {
-        # ---- Rp20.000 — Dominan Hijau ----
+        # ---- Rp20.000 — Hijau ----
+        # PERBAIKAN:
+        # S minimum diturunkan dari 80 ke 35 agar hijau pucat tetap terdeteksi.
+        # Bobot dinaikkan karena Rp20.000 sering kalah oleh Rp2.000 saat redup.
         "nama"  : "Rp20.000",
         "suara" : "Dua puluh ribu rupiah",
-        "bobot" : 1.0,
-        "lower1": np.array([36,  80,  80],  dtype=np.uint8),
-        "upper1": np.array([85,  255, 255], dtype=np.uint8),
+        "bobot" : 1.40,
+
+        "lower1": np.array([35,  35,  40], dtype=np.uint8),
+        "upper1": np.array([92, 255, 255], dtype=np.uint8),
+
         "lower2": None,
         "upper2": None,
     },
     {
-        # ---- Rp10.000 — Dominan Ungu ----
+        # ---- Rp10.000 — Ungu ----
         "nama"  : "Rp10.000",
         "suara" : "Sepuluh ribu rupiah",
-        "bobot" : 1.0,
-        "lower1": np.array([130, 50,  50],  dtype=np.uint8),
-        "upper1": np.array([160, 255, 255], dtype=np.uint8),
+        "bobot" : 1.05,
+
+        "lower1": np.array([125, 35,  45], dtype=np.uint8),
+        "upper1": np.array([162, 255, 255], dtype=np.uint8),
+
         "lower2": None,
         "upper2": None,
     },
     {
-        # ---- Rp5.000 — Dominan Coklat/Kuning Keemasan ----
+        # ---- Rp5.000 — Coklat / Kuning Keemasan ----
         "nama"  : "Rp5.000",
         "suara" : "Lima ribu rupiah",
         "bobot" : 1.0,
-        "lower1": np.array([15,  80,  80],  dtype=np.uint8),
-        "upper1": np.array([35,  255, 255], dtype=np.uint8),
+
+        "lower1": np.array([13,  45,  45], dtype=np.uint8),
+        "upper1": np.array([36, 255, 255], dtype=np.uint8),
+
         "lower2": None,
         "upper2": None,
     },
     {
-        # ---- Rp2.000 — Dominan Abu-abu ----
+        # ---- Rp2.000 — Abu-abu ----
+        # PERBAIKAN:
+        # Bobot diturunkan besar karena abu-abu sangat mudah false positive.
+        # S maksimum diperkecil agar warna uang lain yang redup tidak mudah masuk.
         "nama"  : "Rp2.000",
         "suara" : "Dua ribu rupiah",
-        # Bobot sangat rendah karena abu-abu sangat mudah false positive
-        "bobot" : 0.35,
-        "lower1": np.array([0,   0,   100], dtype=np.uint8),
-        "upper1": np.array([179, 35,  190], dtype=np.uint8),
+        "bobot" : 0.20,
+
+        "lower1": np.array([0,   0,   105], dtype=np.uint8),
+        "upper1": np.array([179, 28,  185], dtype=np.uint8),
+
         "lower2": None,
         "upper2": None,
     },
     {
-        # ---- Rp1.000 — Dominan Hijau Kebiruan (Teal/Cyan) ----
+        # ---- Rp1.000 — Hijau Kebiruan / Teal ----
         "nama"  : "Rp1.000",
         "suara" : "Seribu rupiah",
-        "bobot" : 0.9,
-        "lower1": np.array([85,  80,  80],  dtype=np.uint8),
-        "upper1": np.array([100, 255, 255], dtype=np.uint8),
+        "bobot" : 0.90,
+
+        "lower1": np.array([82,  45,  45], dtype=np.uint8),
+        "upper1": np.array([102, 255, 255], dtype=np.uint8),
+
         "lower2": None,
         "upper2": None,
     },

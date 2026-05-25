@@ -39,7 +39,7 @@ from modules import ui
 from modules import money_validator
 from modules import template_matcher
 from modules import hybrid_decision
-
+from modules.preprocessing import preprocess_roi
 
 # Label-label yang bukan nominal uang (tidak dibacakan TTS)
 STATUS_NON_NOMINAL = {
@@ -80,49 +80,99 @@ def buka_kamera():
 
 def proses_roi_hybrid(roi: np.ndarray, metode_roi: str) -> tuple:
     """
-    Memproses ROI melalui pipeline hybrid: HSV → Template → Gabungkan.
+    Memproses ROI melalui pipeline hybrid:
+    ROI asli → preprocessing → cek cahaya → HSV → Template → Hybrid Decision.
 
     Mengembalikan:
         tuple (label_final, hasil_hsv, hasil_template, skor_template, sumber)
     """
+
     # Nilai default jika ROI kosong
     if roi is None or roi.size == 0:
-        return "Arahkan uang ke kamera", "Arahkan uang ke kamera", \
-               "Tidak ada template", 0.0, "Tidak yakin"
+        return (
+            "Arahkan uang ke kamera",
+            "Arahkan uang ke kamera",
+            "Tidak ada template",
+            0.0,
+            "Tidak yakin"
+        )
 
-    # ---- Langkah 1: Cek Pencahayaan ---- #
-    roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    # ------------------------------------------------------------
+    # LANGKAH 1: PREPROCESSING ROI
+    # ------------------------------------------------------------
+    # Ini bagian penting yang sebelumnya belum dipakai.
+    # Tujuannya agar citra lebih stabil terhadap cahaya.
+    roi_processed = preprocess_roi(roi)
+
+    # ------------------------------------------------------------
+    # LANGKAH 2: CEK PENCAHAYAAN
+    # ------------------------------------------------------------
+    # Cek pencahayaan dilakukan setelah preprocessing agar gambar
+    # yang awalnya agak redup masih bisa diperbaiki terlebih dahulu.
+    roi_hsv = cv2.cvtColor(roi_processed, cv2.COLOR_BGR2HSV)
+
     if lighting.cek_kondisi_cahaya(roi_hsv):
-        return "Cahaya Kurang", "Cahaya Kurang", \
-               "Tidak ada template", 0.0, "Tidak yakin"
+        return (
+            "Cahaya Kurang",
+            "Cahaya Kurang",
+            "Tidak ada template",
+            0.0,
+            "Tidak yakin"
+        )
 
-    # ---- Langkah 2: Validasi Objek (opsional, tergantung mode) ---- #
-    # Pada mode AUTO, validasi dijalankan karena ROI bisa dari mana saja.
-    # Pada mode GUIDE, hanya dijalankan jika VALIDASI_KETAT_GUIDE = True.
+    # ------------------------------------------------------------
+    # LANGKAH 3: VALIDASI OBJEK
+    # ------------------------------------------------------------
+    # Pada mode AUTO validasi tetap perlu karena ROI bisa berasal
+    # dari objek apa pun.
+    #
+    # Pada mode GUIDE, validasi hanya dijalankan jika
+    # config.VALIDASI_KETAT_GUIDE = True.
+    #
+    # Validasi menggunakan ROI hasil preprocessing agar tekstur
+    # dan variasi warnanya lebih terbaca.
     if metode_roi == "AUTO":
-        tekstur_valid = money_validator.validasi_tekstur_uang(roi)
-        warna_valid   = money_validator.validasi_variasi_warna(roi)
+        tekstur_valid = money_validator.validasi_tekstur_uang(roi_processed)
+        warna_valid = money_validator.validasi_variasi_warna(roi_processed)
+
         if not tekstur_valid or not warna_valid:
-            return "Objek bukan uang", "Objek bukan uang", \
-                   "Tidak ada template", 0.0, "Tidak yakin"
+            return (
+                "Objek bukan uang",
+                "Objek bukan uang",
+                "Tidak ada template",
+                0.0,
+                "Tidak yakin"
+            )
 
     elif metode_roi == "GUIDE" and config.VALIDASI_KETAT_GUIDE:
-        tekstur_valid = money_validator.validasi_tekstur_uang(roi)
-        warna_valid   = money_validator.validasi_variasi_warna(roi)
+        tekstur_valid = money_validator.validasi_tekstur_uang(roi_processed)
+        warna_valid = money_validator.validasi_variasi_warna(roi_processed)
+
         if not tekstur_valid or not warna_valid:
-            return "Objek bukan uang", "Objek bukan uang", \
-                   "Tidak ada template", 0.0, "Tidak yakin"
+            return (
+                "Objek bukan uang",
+                "Objek bukan uang",
+                "Tidak ada template",
+                0.0,
+                "Tidak yakin"
+            )
 
-    # ---- Langkah 3: Deteksi HSV ---- #
-    # color_detector menganalisis distribusi warna pada ROI
-    hasil_hsv = color_detector.tentukan_nominal(roi)
+    # ------------------------------------------------------------
+    # LANGKAH 4: DETEKSI HSV
+    # ------------------------------------------------------------
+    # Gunakan ROI hasil preprocessing, bukan ROI asli.
+    hasil_hsv = color_detector.tentukan_nominal(roi_processed)
 
-    # ---- Langkah 4: Template Matching ---- #
-    # template_matcher mencari pola angka nominal pada ROI (grayscale)
-    hasil_template, skor_template, _ = template_matcher.cocokkan_template(roi)
+    # ------------------------------------------------------------
+    # LANGKAH 5: TEMPLATE MATCHING
+    # ------------------------------------------------------------
+    # Gunakan ROI hasil preprocessing agar template matching
+    # lebih tahan terhadap perubahan cahaya.
+    hasil_template, skor_template, _ = template_matcher.cocokkan_template(roi_processed)
 
-    # ---- Langkah 5: Keputusan Hybrid ---- #
-    # Gabungkan hasil HSV dan template berdasarkan aturan di hybrid_decision
+    # ------------------------------------------------------------
+    # LANGKAH 6: HYBRID DECISION
+    # ------------------------------------------------------------
     label_final, sumber = hybrid_decision.gabungkan_keputusan(
         hasil_hsv,
         hasil_template,
@@ -261,7 +311,8 @@ def main() -> None:
 
         # ---- Langkah 10: TTS — hanya bicara jika label adalah nominal valid ---- #
         # Status seperti "Cahaya Kurang" dan "Objek bukan uang" tidak dibacakan
-        speech.bicara_nominal(label_final)
+        if label_final not in STATUS_NON_NOMINAL:
+            speech.bicara_nominal(label_final)
 
         # ---- Langkah 11: Tampilkan Frame ---- #
         cv2.imshow(ui.NAMA_JENDELA_UTAMA, frame)
