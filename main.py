@@ -2,12 +2,12 @@
 ====================================================================
 main.py — Orchestrator Utama Vision-to-Audio Bridge
 ====================================================================
-Versi v5 HYBRID (Guide + HSV + Template Matching):
+Versi v5.1 HYBRID + TRACKING (Guide + HSV + Template Matching + KCF Tracker):
 
 Pipeline deteksi per frame:
   1. Baca frame kamera
   2. Resize + Median Blur
-  3. Ambil ROI dari kotak guide (mode GUIDE) atau kontur (mode AUTO)
+  3. Ambil ROI dari kotak guide (mode GUIDE) atau kontur/tracker (mode AUTO)
   4. Jika ROI tidak ada → tampilkan "Letakkan uang di dalam kotak"
   5. Cek pencahayaan (channel V pada HSV)
   6. Jalankan deteksi warna HSV → hasil_hsv
@@ -23,6 +23,7 @@ Tombol keyboard:
   T = kalibrasi trackbar HSV
   M = ganti mode ROI: GUIDE / AUTO
   H = toggle tampilan info hybrid di layar
+  R = reset tracking (hanya bekerja pada mode AUTO)
 ====================================================================
 """
 
@@ -100,15 +101,11 @@ def proses_roi_hybrid(roi: np.ndarray, metode_roi: str) -> tuple:
     # ------------------------------------------------------------
     # LANGKAH 1: PREPROCESSING ROI
     # ------------------------------------------------------------
-    # Ini bagian penting yang sebelumnya belum dipakai.
-    # Tujuannya agar citra lebih stabil terhadap cahaya.
     roi_processed = preprocess_roi(roi)
 
     # ------------------------------------------------------------
     # LANGKAH 2: CEK PENCAHAYAAN
     # ------------------------------------------------------------
-    # Cek pencahayaan dilakukan setelah preprocessing agar gambar
-    # yang awalnya agak redup masih bisa diperbaiki terlebih dahulu.
     roi_hsv = cv2.cvtColor(roi_processed, cv2.COLOR_BGR2HSV)
 
     if lighting.cek_kondisi_cahaya(roi_hsv):
@@ -123,15 +120,8 @@ def proses_roi_hybrid(roi: np.ndarray, metode_roi: str) -> tuple:
     # ------------------------------------------------------------
     # LANGKAH 3: VALIDASI OBJEK
     # ------------------------------------------------------------
-    # Pada mode AUTO validasi tetap perlu karena ROI bisa berasal
-    # dari objek apa pun.
-    #
-    # Pada mode GUIDE, validasi hanya dijalankan jika
-    # config.VALIDASI_KETAT_GUIDE = True.
-    #
-    # Validasi menggunakan ROI hasil preprocessing agar tekstur
-    # dan variasi warnanya lebih terbaca.
-    if metode_roi == "AUTO":
+    # Validasi tetap dijalankan baik dari tracking AUTO maupun GUIDE jika ketat
+    if metode_roi == "AUTO" or metode_roi == "TRACKING":
         tekstur_valid = money_validator.validasi_tekstur_uang(roi_processed)
         warna_valid = money_validator.validasi_variasi_warna(roi_processed)
 
@@ -160,14 +150,11 @@ def proses_roi_hybrid(roi: np.ndarray, metode_roi: str) -> tuple:
     # ------------------------------------------------------------
     # LANGKAH 4: DETEKSI HSV
     # ------------------------------------------------------------
-    # Gunakan ROI hasil preprocessing, bukan ROI asli.
     hasil_hsv = color_detector.tentukan_nominal(roi_processed)
 
     # ------------------------------------------------------------
     # LANGKAH 5: TEMPLATE MATCHING
     # ------------------------------------------------------------
-    # Gunakan ROI hasil preprocessing agar template matching
-    # lebih tahan terhadap perubahan cahaya.
     hasil_template, skor_template, _ = template_matcher.cocokkan_template(roi_processed)
 
     # ------------------------------------------------------------
@@ -184,7 +171,7 @@ def proses_roi_hybrid(roi: np.ndarray, metode_roi: str) -> tuple:
 
 def main() -> None:
     """
-    Loop utama program Vision-to-Audio Bridge.
+    Loop utama program Vision-to-Audio Bridge dengan Fitur KCF Tracking Terintegrasi.
     """
     kamera = buka_kamera()
 
@@ -195,14 +182,19 @@ def main() -> None:
         return
 
     print("[INFO] Kamera berhasil dibuka.")
-    print("[INFO] Tombol: Q=Keluar | D=Debug | T=Kalibrasi | M=Mode | H=Info Hybrid")
+    print("[INFO] Tombol: Q=Keluar | D=Debug | T=Kalibrasi | M=Mode | H=Info Hybrid | R=Reset Tracking")
     print("[INFO] Mode awal: GUIDE. Letakkan uang asli di dalam kotak panduan.")
 
     # ---- State Program ---- #
     mode_debug         = False
     mode_kalibrasi     = False
-    mode_roi           = "GUIDE"       # GUIDE = kotak panduan manual
+    mode_roi           = "GUIDE"       # GUIDE / AUTO
     tampilkan_hybrid   = config.TAMPILKAN_INFO_HYBRID  # H untuk toggle
+
+    # ---- State Machine untuk Tracking (Khusus Mode AUTO) ---- #
+    tracker = None
+    is_tracking = False
+    counter_lost = 0
 
     # ---- Variabel FPS ---- #
     waktu_fps_sebelumnya = time.time()
@@ -224,30 +216,62 @@ def main() -> None:
         roi         = None
         bbox        = None
         is_fallback = (mode_roi == "GUIDE")
+        metode_tekstur = mode_roi
 
-        # ---- Langkah 2: Ambil ROI ---- #
+        # ---- Langkah 2: Ambil ROI (Logika Panduan vs Tracker Otomatis) ---- #
         if mode_roi == "GUIDE":
             # Mode GUIDE: ROI diambil dari kotak panduan tetap di tengah frame
             hasil_roi  = roi_detector.ambil_roi_guide(frame_blur)
             label_awal = "Letakkan uang di dalam kotak"
+            if hasil_roi is not None:
+                roi, bbox = hasil_roi
         else:
-            # Mode AUTO: ROI dicari otomatis dari kontur Canny
-            hasil_roi  = roi_detector.cari_kotak_uang(frame_blur)
+            # Mode AUTO: Logika Hibrida Deteksi Kontur Baru + Object Tracking
             label_awal = "Arahkan uang ke kamera"
-
-        if hasil_roi is not None:
-            roi, bbox = hasil_roi
+            
+            if not is_tracking:
+                # Cari objek uang baru dari kontur geometri Canny
+                hasil_roi = roi_detector.cari_kotak_uang(frame_blur)
+                if hasil_roi is not None:
+                    roi, bbox = hasil_roi
+                    metode_tekstur = "AUTO"
+                    
+                    # Coba inisialisasi mesin Tracker KCF bawaan dari file modules Anda
+                    tracker = roi_detector.inisialisasi_tracker()
+                    if tracker is not None:
+                        success = tracker.init(frame_blur, bbox)
+                        if success:
+                            is_tracking = True
+            else:
+                # Jika objek uang sudah dikunci, biarkan mesin KCF Tracker melacak koordinatnya
+                success, tracked_bbox = tracker.update(frame_blur)
+                if success:
+                    bbox = tuple(map(int, tracked_bbox))
+                    x, y, w, h = bbox
+                    
+                    # Batasi koordinat crop agar tidak melebihi resolusi piksel layar monitor
+                    x1, y1 = max(0, x), max(0, y)
+                    x2, y2 = min(frame.shape[1], x + w), min(frame.shape[0], y + h)
+                    
+                    roi = frame_blur[y1:y2, x1:x2]
+                    metode_tekstur = "TRACKING"
+                    counter_lost = 0
+                else:
+                    counter_lost += 1
+                    # Jika pelacak meleset selama lebih dari 5 frame berturut-turut, matikan tracker
+                    if counter_lost > 5:
+                        is_tracking = False
+                        tracker = None
 
         # ---- Langkah 3: Proses atau Tampilkan Status Kosong ---- #
         if roi is None or bbox is None:
-            # ROI tidak tersedia → tampilkan pesan panduan
             label_final    = label_awal
             hasil_hsv      = label_awal
             hasil_template = "Tidak ada template"
             skor_template  = 0.0
             sumber         = "Tidak yakin"
 
-            # Tetap tampilkan kotak guide agar user tahu posisi yang benar
+            # Tetap gambar kotak petunjuk agar mata pengguna tahu letak fokus kamera
             hasil_guide = roi_detector.ambil_roi_guide(frame_blur)
             if hasil_guide is not None:
                 _, bbox = hasil_guide
@@ -258,7 +282,7 @@ def main() -> None:
         else:
             # ---- Langkah 4–8: Pipeline Hybrid ---- #
             label_final, hasil_hsv, hasil_template, skor_template, sumber = \
-                proses_roi_hybrid(roi, mode_roi)
+                proses_roi_hybrid(roi, metode_tekstur)
 
         # ---- Langkah 9: Render Tampilan ---- #
 
@@ -268,10 +292,14 @@ def main() -> None:
         # Gambar HUD bawah dengan label final
         ui.gambar_hud(frame, label_final, fps_aktif)
 
-        # Label mode ROI di atas layar
+        # Label status sistem di kiri atas layar komputer
+        label_status_layar = f"MODE ROI: {mode_roi}"
+        if is_tracking and mode_roi == "AUTO":
+            label_status_layar += " (LOCKED)"
+            
         cv2.putText(
             frame,
-            f"MODE ROI: {mode_roi}",
+            label_status_layar,
             (10, 28),
             cv2.FONT_HERSHEY_SIMPLEX, 0.65,
             (0, 255, 255) if mode_roi == "GUIDE" else (0, 220, 50),
@@ -310,7 +338,6 @@ def main() -> None:
         waktu_fps_sebelumnya = waktu_sekarang
 
         # ---- Langkah 10: TTS — hanya bicara jika label adalah nominal valid ---- #
-        # Status seperti "Cahaya Kurang" dan "Objek bukan uang" tidak dibacakan
         if label_final not in STATUS_NON_NOMINAL:
             speech.bicara_nominal(label_final)
 
@@ -344,12 +371,21 @@ def main() -> None:
         elif tombol == ord("m"):
             # Toggle antara mode GUIDE dan AUTO
             mode_roi = "AUTO" if mode_roi == "GUIDE" else "GUIDE"
-            print(f"[INFO] Mode ROI: {mode_roi}")
+            is_tracking = False
+            tracker = None
+            print(f"[INFO] Mode ROI berpindah ke: {mode_roi}")
 
         elif tombol == ord("h"):
             # Toggle tampilan info hybrid di layar
             tampilkan_hybrid = not tampilkan_hybrid
             print(f"[INFO] Info Hybrid: {'TAMPIL' if tampilkan_hybrid else 'SEMBUNYI'}")
+
+        elif tombol == ord("r"):
+            # Reset paksa tracker pada mode AUTO
+            if mode_roi == "AUTO":
+                is_tracking = False
+                tracker = None
+                print("[INFO] Pelacak KCF di-reset paksa ke pencarian kontur awal.")
 
     # ---- Bersihkan Resource ---- #
     kamera.release()

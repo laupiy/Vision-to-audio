@@ -182,3 +182,19 @@ def ambil_roi_guide(frame: np.ndarray):
         return None
 
     return roi, bbox
+
+
+def inisialisasi_tracker():
+    """
+    Membuat objek KCF Tracker secara dinamis untuk menghindari kegagalan lintas versi OpenCV.
+    
+    Return:
+        Objek tracker KCF jika tersedia, atau None jika modul dinonaktifkan di sistem.
+    """
+    try:
+        return cv2.TrackerKCF.create()
+    except AttributeError:
+        try:
+            return cv2.legacy.TrackerKCF_create()
+        except AttributeError:
+            return None
