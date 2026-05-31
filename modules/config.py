@@ -123,7 +123,7 @@ NOMINAL_HSV = [
         "suara" : "Seratus ribu rupiah",
         "bobot" : 1.25,
 
-        "lower1": np.array([0,   60,  55], dtype=np.uint8),
+        "lower1": np.array([0,   9,  64], dtype=np.uint8),
         "upper1": np.array([12, 255, 255], dtype=np.uint8),
 
         "lower2": np.array([155, 60,  55], dtype=np.uint8),
@@ -135,8 +135,8 @@ NOMINAL_HSV = [
         "suara" : "Lima puluh ribu rupiah",
         "bobot" : 1.05,
 
-        "lower1": np.array([95,  50,  45], dtype=np.uint8),
-        "upper1": np.array([132, 255, 255], dtype=np.uint8),
+        "lower1": np.array([4,  18,  43], dtype=np.uint8),
+        "upper1": np.array([129, 153, 207], dtype=np.uint8),
 
         "lower2": None,
         "upper2": None,
@@ -150,8 +150,8 @@ NOMINAL_HSV = [
         "suara" : "Dua puluh ribu rupiah",
         "bobot" : 1.40,
 
-        "lower1": np.array([35,  35,  40], dtype=np.uint8),
-        "upper1": np.array([92, 255, 255], dtype=np.uint8),
+        "lower1": np.array([0,  5,  69], dtype=np.uint8),
+        "upper1": np.array([175, 96, 234], dtype=np.uint8),
 
         "lower2": None,
         "upper2": None,
@@ -162,8 +162,8 @@ NOMINAL_HSV = [
         "suara" : "Sepuluh ribu rupiah",
         "bobot" : 1.05,
 
-        "lower1": np.array([125, 35,  45], dtype=np.uint8),
-        "upper1": np.array([162, 255, 255], dtype=np.uint8),
+        "lower1": np.array([4, 5,  53], dtype=np.uint8),
+        "upper1": np.array([165, 82, 203], dtype=np.uint8),
 
         "lower2": None,
         "upper2": None,
@@ -174,8 +174,8 @@ NOMINAL_HSV = [
         "suara" : "Lima ribu rupiah",
         "bobot" : 1.0,
 
-        "lower1": np.array([13,  45,  45], dtype=np.uint8),
-        "upper1": np.array([36, 255, 255], dtype=np.uint8),
+        "lower1": np.array([0,   8,   62], dtype=np.uint8),
+        "upper1": np.array([173, 73, 207], dtype=np.uint8),
 
         "lower2": None,
         "upper2": None,
@@ -189,8 +189,8 @@ NOMINAL_HSV = [
         "suara" : "Dua ribu rupiah",
         "bobot" : 0.20,
 
-        "lower1": np.array([0,   0,   105], dtype=np.uint8),
-        "upper1": np.array([179, 28,  185], dtype=np.uint8),
+        "lower1": np.array([3,   2,   36], dtype=np.uint8),
+        "upper1": np.array([170, 92,  223], dtype=np.uint8),
 
         "lower2": None,
         "upper2": None,
@@ -201,8 +201,8 @@ NOMINAL_HSV = [
         "suara" : "Seribu rupiah",
         "bobot" : 0.90,
 
-        "lower1": np.array([82,  45,  45], dtype=np.uint8),
-        "upper1": np.array([102, 255, 255], dtype=np.uint8),
+        "lower1": np.array([2,  4,  33], dtype=np.uint8),
+        "upper1": np.array([173, 77, 221], dtype=np.uint8),
 
         "lower2": None,
         "upper2": None,
