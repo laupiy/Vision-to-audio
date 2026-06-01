@@ -12,3 +12,8 @@ Thumbs.db
 
 .vscode/
 .idea/
+
+# SSL Certificates (JANGAN di-push ke GitHub!)
+*.pem
+cert.pem
+key.pem

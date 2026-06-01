@@ -1,35 +1,24 @@
 """
 ====================================================================
-main.py — Orchestrator Utama Vision-to-Audio Bridge
+main.py — Orchestrator Utama Vision-to-Audio Bridge (WEB SERVER)
 ====================================================================
-Versi v5.1 HYBRID + TRACKING (Guide + HSV + Template Matching + KCF Tracker):
-
-Pipeline deteksi per frame:
-  1. Baca frame kamera
-  2. Resize + Median Blur
-  3. Ambil ROI dari kotak guide (mode GUIDE) atau kontur/tracker (mode AUTO)
-  4. Jika ROI tidak ada → tampilkan "Letakkan uang di dalam kotak"
-  5. Cek pencahayaan (channel V pada HSV)
-  6. Jalankan deteksi warna HSV → hasil_hsv
-  7. Jalankan template matching → hasil_template, skor_template
-  8. Gabungkan keduanya via hybrid_decision → label_final
-  9. Tampilkan info hybrid di layar (HSV / Template / Sumber)
-  10. TTS membacakan label_final
-  11. Tampilkan frame ke layar
-
-Tombol keyboard:
-  Q = keluar
-  D = debug Canny/Morfologi
-  T = kalibrasi trackbar HSV
-  M = ganti mode ROI: GUIDE / AUTO
-  H = toggle tampilan info hybrid di layar
-  R = reset tracking (hanya bekerja pada mode AUTO)
+Versi v7.0 Multi-Device:
+- Mode Server Camera: streaming kamera server via MJPEG
+- Mode Device Camera: client mengirim frame dari kamera device,
+  server memproses dan mengembalikan label + frame yang sudah dianotasi
+- HTTPS agar getUserMedia bisa berjalan di device lain
+- Listen pada 0.0.0.0 agar bisa diakses dari jaringan lokal
 ====================================================================
 """
 
 import cv2
 import time
 import numpy as np
+import threading
+import base64
+import ssl
+import os
+from flask import Flask, Response, request, jsonify, send_from_directory
 
 from modules import config
 from modules import roi_detector
@@ -42,7 +31,26 @@ from modules import template_matcher
 from modules import hybrid_decision
 from modules.preprocessing import preprocess_roi
 
-# Label-label yang bukan nominal uang (tidak dibacakan TTS)
+app = Flask(__name__, static_folder='frontendweb', static_url_path='')
+
+# ------------------------------------------------------------
+# GLOBAL STATE
+# ------------------------------------------------------------
+camera = None
+is_camera_on = False
+mode_roi = "GUIDE"
+current_label = "Kamera Mati"
+latest_frame_encoded = None
+state_lock = threading.Lock()
+
+web_params = {
+    'brightness': 50,
+    'contrast': 50,
+    'confidence': 75,
+    'overlap': 30,
+    'opacity': 80
+}
+
 STATUS_NON_NOMINAL = {
     "Letakkan uang di dalam kotak",
     "Arahkan uang ke kamera",
@@ -50,348 +58,403 @@ STATUS_NON_NOMINAL = {
     "Objek bukan uang",
     "Tidak terdeteksi",
     "Tidak yakin",
+    "Kamera Mati"
 }
 
 
 def buka_kamera():
-    """
-    Membuka kamera dengan beberapa backend/index.
-    Di Windows, CAP_DSHOW sering lebih stabil daripada default MSMF.
-    """
     kandidat_backend = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
     kandidat_index   = [0, 1, 2]
 
     for backend in kandidat_backend:
         for index in kandidat_index:
-            kamera = cv2.VideoCapture(index, backend)
-            if kamera.isOpened():
-                kamera.set(cv2.CAP_PROP_FRAME_WIDTH,  config.FRAME_WIDTH)
-                kamera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
-                kamera.set(cv2.CAP_PROP_FPS, 30)
+            kam = cv2.VideoCapture(index, backend)
+            if kam.isOpened():
+                kam.set(cv2.CAP_PROP_FRAME_WIDTH,  config.FRAME_WIDTH)
+                kam.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+                kam.set(cv2.CAP_PROP_FPS, 30)
 
-                ret, _ = kamera.read()
+                ret, _ = kam.read()
                 if ret:
                     print(f"[INFO] Kamera aktif: index={index}, backend={backend}")
-                    return kamera
-
-            kamera.release()
-
+                    return kam
+            kam.release()
     return None
 
 
+def apply_web_adjustments(frame):
+    brightness = web_params['brightness'] - 50
+    contrast = web_params['contrast'] / 50.0
+    b_val = brightness * 2.5
+    frame_adj = cv2.convertScaleAbs(frame, alpha=contrast, beta=b_val)
+    return frame_adj
+
+
 def proses_roi_hybrid(roi: np.ndarray, metode_roi: str) -> tuple:
-    """
-    Memproses ROI melalui pipeline hybrid:
-    ROI asli → preprocessing → cek cahaya → HSV → Template → Hybrid Decision.
-
-    Mengembalikan:
-        tuple (label_final, hasil_hsv, hasil_template, skor_template, sumber)
-    """
-
-    # Nilai default jika ROI kosong
     if roi is None or roi.size == 0:
-        return (
-            "Arahkan uang ke kamera",
-            "Arahkan uang ke kamera",
-            "Tidak ada template",
-            0.0,
-            "Tidak yakin"
-        )
+        return ("Arahkan uang ke kamera", "Arahkan uang ke kamera", "Tidak ada template", 0.0, "Tidak yakin")
 
-    # ------------------------------------------------------------
-    # LANGKAH 1: PREPROCESSING ROI
-    # ------------------------------------------------------------
     roi_processed = preprocess_roi(roi)
-
-    # ------------------------------------------------------------
-    # LANGKAH 2: CEK PENCAHAYAAN
-    # ------------------------------------------------------------
     roi_hsv = cv2.cvtColor(roi_processed, cv2.COLOR_BGR2HSV)
 
     if lighting.cek_kondisi_cahaya(roi_hsv):
-        return (
-            "Cahaya Kurang",
-            "Cahaya Kurang",
-            "Tidak ada template",
-            0.0,
-            "Tidak yakin"
-        )
+        return ("Cahaya Kurang", "Cahaya Kurang", "Tidak ada template", 0.0, "Tidak yakin")
 
-    # ------------------------------------------------------------
-    # LANGKAH 3: VALIDASI OBJEK
-    # ------------------------------------------------------------
-    # Validasi tetap dijalankan baik dari tracking AUTO maupun GUIDE jika ketat
     if metode_roi == "AUTO" or metode_roi == "TRACKING":
         tekstur_valid = money_validator.validasi_tekstur_uang(roi_processed)
         warna_valid = money_validator.validasi_variasi_warna(roi_processed)
-
         if not tekstur_valid or not warna_valid:
-            return (
-                "Objek bukan uang",
-                "Objek bukan uang",
-                "Tidak ada template",
-                0.0,
-                "Tidak yakin"
-            )
-
+            return ("Objek bukan uang", "Objek bukan uang", "Tidak ada template", 0.0, "Tidak yakin")
     elif metode_roi == "GUIDE" and config.VALIDASI_KETAT_GUIDE:
         tekstur_valid = money_validator.validasi_tekstur_uang(roi_processed)
         warna_valid = money_validator.validasi_variasi_warna(roi_processed)
-
         if not tekstur_valid or not warna_valid:
-            return (
-                "Objek bukan uang",
-                "Objek bukan uang",
-                "Tidak ada template",
-                0.0,
-                "Tidak yakin"
-            )
+            return ("Objek bukan uang", "Objek bukan uang", "Tidak ada template", 0.0, "Tidak yakin")
 
-    # ------------------------------------------------------------
-    # LANGKAH 4: DETEKSI HSV
-    # ------------------------------------------------------------
     hasil_hsv = color_detector.tentukan_nominal(roi_processed)
-
-    # ------------------------------------------------------------
-    # LANGKAH 5: TEMPLATE MATCHING
-    # ------------------------------------------------------------
     hasil_template, skor_template, _ = template_matcher.cocokkan_template(roi_processed)
-
-    # ------------------------------------------------------------
-    # LANGKAH 6: HYBRID DECISION
-    # ------------------------------------------------------------
-    label_final, sumber = hybrid_decision.gabungkan_keputusan(
-        hasil_hsv,
-        hasil_template,
-        skor_template
-    )
+    label_final, sumber = hybrid_decision.gabungkan_keputusan(hasil_hsv, hasil_template, skor_template)
 
     return label_final, hasil_hsv, hasil_template, skor_template, sumber
 
 
-def main() -> None:
+def process_single_frame(frame):
     """
-    Loop utama program Vision-to-Audio Bridge dengan Fitur KCF Tracking Terintegrasi.
+    Proses 1 frame tunggal (dari server camera atau dari client device).
+    Mengembalikan (label_final, frame_annotated).
     """
-    kamera = buka_kamera()
+    frame = apply_web_adjustments(frame)
+    frame = cv2.resize(frame, (config.FRAME_WIDTH, config.FRAME_HEIGHT))
+    frame_blur = cv2.medianBlur(frame, 5)
 
-    if kamera is None:
-        print("[ERROR] Kamera tidak dapat dibuka.")
-        print("[SARAN] Tutup Camera/Zoom/Meet/OBS, lalu jalankan ulang.")
-        print("[SARAN] Cek izin kamera: Settings > Privacy > Camera.")
-        return
+    roi = None
+    bbox = None
+    is_fallback = (mode_roi == "GUIDE")
+    metode_tekstur = mode_roi
 
-    print("[INFO] Kamera berhasil dibuka.")
-    print("[INFO] Tombol: Q=Keluar | D=Debug | T=Kalibrasi | M=Mode | H=Info Hybrid | R=Reset Tracking")
-    print("[INFO] Mode awal: GUIDE. Letakkan uang asli di dalam kotak panduan.")
+    if mode_roi == "GUIDE":
+        hasil_roi = roi_detector.ambil_roi_guide(frame_blur)
+        label_awal = "Letakkan uang di dalam kotak"
+        if hasil_roi is not None:
+            roi, bbox = hasil_roi
+    else:
+        label_awal = "Arahkan uang ke kamera"
+        hasil_roi = roi_detector.cari_kotak_uang(frame_blur)
+        if hasil_roi is not None:
+            roi, bbox = hasil_roi
+            metode_tekstur = "AUTO"
 
-    # ---- State Program ---- #
-    mode_debug         = False
-    mode_kalibrasi     = False
-    mode_roi           = "GUIDE"       # GUIDE / AUTO
-    tampilkan_hybrid   = config.TAMPILKAN_INFO_HYBRID  # H untuk toggle
+    if roi is None or bbox is None:
+        label_final = label_awal
+        hasil_hsv = label_awal
+        hasil_template = "Tidak ada template"
+        skor_template = 0.0
+        sumber = "Tidak yakin"
 
-    # ---- State Machine untuk Tracking (Khusus Mode AUTO) ---- #
+        hasil_guide = roi_detector.ambil_roi_guide(frame_blur)
+        if hasil_guide is not None:
+            _, bbox = hasil_guide
+            is_fallback = True
+        else:
+            bbox = (0, 0, config.FRAME_WIDTH, config.FRAME_HEIGHT)
+    else:
+        label_final, hasil_hsv, hasil_template, skor_template, sumber = \
+            proses_roi_hybrid(roi, metode_tekstur)
+
+    # Draw overlays
+    ui.gambar_bounding_box(frame, bbox, label_final, is_fallback=is_fallback)
+    ui.gambar_hud(frame, label_final, 0.0)
+    ui.gambar_info_hybrid(frame, hasil_hsv, hasil_template, skor_template, sumber, label_final)
+
+    return label_final, frame
+
+
+# ============================================================
+# SERVER CAMERA LOOP (untuk mode kamera server)
+# ============================================================
+def camera_loop():
+    global camera, is_camera_on, current_label, latest_frame_encoded, mode_roi
+
     tracker = None
     is_tracking = False
     counter_lost = 0
-
-    # ---- Variabel FPS ---- #
     waktu_fps_sebelumnya = time.time()
-    fps_aktif            = 0.0
+    fps_aktif = 0.0
 
-    # ---- Loop Utama ---- #
     while True:
-
-        # ---- Langkah 1: Baca Frame ---- #
-        ret, frame = kamera.read()
-        if not ret:
-            print("[WARNING] Frame gagal diambil, mencoba lagi...")
-            time.sleep(0.3)
+        if not is_camera_on:
+            time.sleep(0.1)
+            # Reset tracker saat kamera dimatikan
+            tracker = None
+            is_tracking = False
+            counter_lost = 0
             continue
 
-        frame      = cv2.resize(frame, (config.FRAME_WIDTH, config.FRAME_HEIGHT))
+        if camera is None or not camera.isOpened():
+            camera = buka_kamera()
+            if camera is None:
+                with state_lock:
+                    current_label = "Gagal buka kamera"
+                time.sleep(1)
+                continue
+
+        ret, frame = camera.read()
+        if not ret:
+            time.sleep(0.1)
+            continue
+
+        frame = apply_web_adjustments(frame)
+        frame = cv2.resize(frame, (config.FRAME_WIDTH, config.FRAME_HEIGHT))
         frame_blur = cv2.medianBlur(frame, 5)
 
-        roi         = None
-        bbox        = None
+        roi = None
+        bbox = None
         is_fallback = (mode_roi == "GUIDE")
         metode_tekstur = mode_roi
 
-        # ---- Langkah 2: Ambil ROI (Logika Panduan vs Tracker Otomatis) ---- #
         if mode_roi == "GUIDE":
-            # Mode GUIDE: ROI diambil dari kotak panduan tetap di tengah frame
-            hasil_roi  = roi_detector.ambil_roi_guide(frame_blur)
+            hasil_roi = roi_detector.ambil_roi_guide(frame_blur)
             label_awal = "Letakkan uang di dalam kotak"
             if hasil_roi is not None:
                 roi, bbox = hasil_roi
         else:
-            # Mode AUTO: Logika Hibrida Deteksi Kontur Baru + Object Tracking
             label_awal = "Arahkan uang ke kamera"
-            
             if not is_tracking:
-                # Cari objek uang baru dari kontur geometri Canny
                 hasil_roi = roi_detector.cari_kotak_uang(frame_blur)
                 if hasil_roi is not None:
                     roi, bbox = hasil_roi
                     metode_tekstur = "AUTO"
-                    
-                    # Coba inisialisasi mesin Tracker KCF bawaan dari file modules Anda
                     tracker = roi_detector.inisialisasi_tracker()
                     if tracker is not None:
                         success = tracker.init(frame_blur, bbox)
                         if success:
                             is_tracking = True
             else:
-                # Jika objek uang sudah dikunci, biarkan mesin KCF Tracker melacak koordinatnya
                 success, tracked_bbox = tracker.update(frame_blur)
                 if success:
                     bbox = tuple(map(int, tracked_bbox))
                     x, y, w, h = bbox
-                    
-                    # Batasi koordinat crop agar tidak melebihi resolusi piksel layar monitor
                     x1, y1 = max(0, x), max(0, y)
                     x2, y2 = min(frame.shape[1], x + w), min(frame.shape[0], y + h)
-                    
                     roi = frame_blur[y1:y2, x1:x2]
                     metode_tekstur = "TRACKING"
                     counter_lost = 0
                 else:
                     counter_lost += 1
-                    # Jika pelacak meleset selama lebih dari 5 frame berturut-turut, matikan tracker
                     if counter_lost > 5:
                         is_tracking = False
                         tracker = None
 
-        # ---- Langkah 3: Proses atau Tampilkan Status Kosong ---- #
         if roi is None or bbox is None:
-            label_final    = label_awal
-            hasil_hsv      = label_awal
+            label_final = label_awal
+            hasil_hsv = label_awal
             hasil_template = "Tidak ada template"
-            skor_template  = 0.0
-            sumber         = "Tidak yakin"
+            skor_template = 0.0
+            sumber = "Tidak yakin"
 
-            # Tetap gambar kotak petunjuk agar mata pengguna tahu letak fokus kamera
             hasil_guide = roi_detector.ambil_roi_guide(frame_blur)
             if hasil_guide is not None:
                 _, bbox = hasil_guide
                 is_fallback = True
             else:
                 bbox = (0, 0, config.FRAME_WIDTH, config.FRAME_HEIGHT)
-
         else:
-            # ---- Langkah 4–8: Pipeline Hybrid ---- #
             label_final, hasil_hsv, hasil_template, skor_template, sumber = \
                 proses_roi_hybrid(roi, metode_tekstur)
 
-        # ---- Langkah 9: Render Tampilan ---- #
-
-        # Gambar kotak bounding box
+        # Drawing
         ui.gambar_bounding_box(frame, bbox, label_final, is_fallback=is_fallback)
-
-        # Gambar HUD bawah dengan label final
         ui.gambar_hud(frame, label_final, fps_aktif)
+        ui.gambar_info_hybrid(frame, hasil_hsv, hasil_template, skor_template, sumber, label_final)
 
-        # Label status sistem di kiri atas layar komputer
-        label_status_layar = f"MODE ROI: {mode_roi}"
-        if is_tracking and mode_roi == "AUTO":
-            label_status_layar += " (LOCKED)"
-            
-        cv2.putText(
-            frame,
-            label_status_layar,
-            (10, 28),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.65,
-            (0, 255, 255) if mode_roi == "GUIDE" else (0, 220, 50),
-            2, cv2.LINE_AA
-        )
-
-        # Info hybrid (HSV / Template / Sumber) jika toggle aktif
-        if tampilkan_hybrid:
-            ui.gambar_info_hybrid(
-                frame,
-                hasil_hsv,
-                hasil_template,
-                skor_template,
-                sumber
-            )
-
-        # Preview mask HSV saat kalibrasi aktif
-        if mode_kalibrasi and roi is not None and roi.size > 0:
-            lower_kalibrasi, upper_kalibrasi = ui.baca_trackbar()
-            roi_hsv_kal    = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-            mask_kalibrasi = cv2.inRange(roi_hsv_kal, lower_kalibrasi, upper_kalibrasi)
-            mask_kecil     = cv2.resize(mask_kalibrasi, (160, 120))
-            mask_bgr       = cv2.cvtColor(mask_kecil, cv2.COLOR_GRAY2BGR)
-            frame[0:120, config.FRAME_WIDTH - 160:config.FRAME_WIDTH] = mask_bgr
-
-        # Debug window Canny + Morfologi
-        if mode_debug:
-            canny_vis, morph_vis = roi_detector.ambil_citra_debug(frame_blur)
-            ui.tampilkan_debug_window(canny_vis, morph_vis)
-
-        # ---- Hitung FPS ---- #
-        waktu_sekarang       = time.time()
-        selang_waktu         = waktu_sekarang - waktu_fps_sebelumnya
+        waktu_sekarang = time.time()
+        selang_waktu = waktu_sekarang - waktu_fps_sebelumnya
         if selang_waktu > 0:
             fps_aktif = 1.0 / selang_waktu
         waktu_fps_sebelumnya = waktu_sekarang
 
-        # ---- Langkah 10: TTS — hanya bicara jika label adalah nominal valid ---- #
-        if label_final not in STATUS_NON_NOMINAL:
-            speech.bicara_nominal(label_final)
+        with state_lock:
+            if current_label != label_final and label_final not in STATUS_NON_NOMINAL:
+                speech.bicara_nominal(label_final)
 
-        # ---- Langkah 11: Tampilkan Frame ---- #
-        cv2.imshow(ui.NAMA_JENDELA_UTAMA, frame)
+            current_label = label_final
 
-        # ---- Tombol Keyboard ---- #
-        tombol = cv2.waitKey(1) & 0xFF
-
-        if tombol == ord("q"):
-            print("[INFO] Keluar dari program.")
-            break
-
-        elif tombol == ord("d"):
-            mode_debug = not mode_debug
-            print(f"[INFO] Mode Debug: {'AKTIF' if mode_debug else 'NONAKTIF'}")
-            if not mode_debug:
-                ui.tutup_debug_window()
-
-        elif tombol == ord("t"):
-            mode_kalibrasi = not mode_kalibrasi
-            print(f"[INFO] Kalibrasi HSV: {'AKTIF' if mode_kalibrasi else 'NONAKTIF'}")
-            if mode_kalibrasi:
-                ui.buat_trackbar()
-            else:
-                try:
-                    cv2.destroyWindow(ui.NAMA_JENDELA_KALIBR)
-                except Exception:
-                    pass
-
-        elif tombol == ord("m"):
-            # Toggle antara mode GUIDE dan AUTO
-            mode_roi = "AUTO" if mode_roi == "GUIDE" else "GUIDE"
-            is_tracking = False
-            tracker = None
-            print(f"[INFO] Mode ROI berpindah ke: {mode_roi}")
-
-        elif tombol == ord("h"):
-            # Toggle tampilan info hybrid di layar
-            tampilkan_hybrid = not tampilkan_hybrid
-            print(f"[INFO] Info Hybrid: {'TAMPIL' if tampilkan_hybrid else 'SEMBUNYI'}")
-
-        elif tombol == ord("r"):
-            # Reset paksa tracker pada mode AUTO
-            if mode_roi == "AUTO":
-                is_tracking = False
-                tracker = None
-                print("[INFO] Pelacak KCF di-reset paksa ke pencarian kontur awal.")
-
-    # ---- Bersihkan Resource ---- #
-    kamera.release()
-    cv2.destroyAllWindows()
-    print("[INFO] Kamera dibebaskan. Sampai jumpa!")
+            ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+            if ret:
+                latest_frame_encoded = buffer.tobytes()
 
 
-if __name__ == "__main__":
-    main()
+def generate_frames():
+    global latest_frame_encoded, is_camera_on
+    while True:
+        if not is_camera_on:
+            time.sleep(0.1)
+            continue
+
+        with state_lock:
+            frame_data = latest_frame_encoded
+
+        if frame_data is not None:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
+
+        time.sleep(0.03)
+
+
+# ============================================================
+# FLASK ROUTES
+# ============================================================
+
+@app.route('/')
+def index():
+    return send_from_directory('frontendweb', 'index.html')
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/status')
+def get_status():
+    with state_lock:
+        return jsonify({'label': current_label if is_camera_on else "Kamera Mati"})
+
+@app.route('/toggle_camera', methods=['POST'])
+def toggle_camera():
+    global is_camera_on, camera, current_label
+    data = request.json
+    is_camera_on = data.get('state', False)
+
+    if not is_camera_on and camera is not None:
+        camera.release()
+        camera = None
+        with state_lock:
+            current_label = "Kamera Mati"
+
+    return jsonify({'success': True, 'state': is_camera_on})
+
+@app.route('/update_params', methods=['POST'])
+def update_params():
+    global mode_roi, web_params
+    data = request.json
+
+    for key, val in data.items():
+        if key in web_params:
+            web_params[key] = float(val)
+        if key == 'mode':
+            mode_roi = val
+
+    if 'confidence' in data:
+        config.TEMPLATE_THRESHOLD_KUAT = float(data['confidence']) / 100.0
+
+    return jsonify({'success': True})
+
+@app.route('/replay_audio', methods=['POST'])
+def replay_audio():
+    with state_lock:
+        if current_label not in STATUS_NON_NOMINAL:
+            speech.bicara_nominal(current_label)
+    return jsonify({'success': True})
+
+
+# ============================================================
+# DEVICE CAMERA ENDPOINT
+# Client mengirim frame JPEG base64, server memproses, 
+# mengembalikan label + frame yang sudah dianotasi
+# ============================================================
+@app.route('/process_client_frame', methods=['POST'])
+def process_client_frame():
+    global current_label
+    try:
+        data = request.json
+        img_data = data.get('frame', '')
+
+        # Decode base64 JPEG -> numpy array
+        if ',' in img_data:
+            img_data = img_data.split(',')[1]
+
+        img_bytes = base64.b64decode(img_data)
+        np_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            return jsonify({'label': 'Frame error', 'frame': ''})
+
+        label_final, frame_annotated = process_single_frame(frame)
+
+        # Update global label & trigger TTS
+        with state_lock:
+            if current_label != label_final and label_final not in STATUS_NON_NOMINAL:
+                speech.bicara_nominal(label_final)
+            current_label = label_final
+
+        # Encode annotated frame back to base64 JPEG
+        ret, buffer = cv2.imencode('.jpg', frame_annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+        if ret:
+            encoded_frame = base64.b64encode(buffer).decode('utf-8')
+        else:
+            encoded_frame = ''
+
+        return jsonify({
+            'label': label_final,
+            'frame': 'data:image/jpeg;base64,' + encoded_frame
+        })
+
+    except Exception as e:
+        print(f"[ERROR] process_client_frame: {e}")
+        return jsonify({'label': 'Error', 'frame': ''})
+
+
+# Fallback untuk request lama
+@app.route('/process_frame', methods=['GET', 'POST'])
+def process_frame_fallback():
+    return jsonify({'label': current_label, 'info': 'endpoint deprecated'})
+
+# Static file catch-all — HARUS paling bawah
+@app.route('/<path:path>')
+def static_proxy(path):
+    return send_from_directory('frontendweb', path)
+
+
+# ============================================================
+# MAIN
+# ============================================================
+if __name__ == '__main__':
+    # Start the server camera loop thread
+    t = threading.Thread(target=camera_loop, daemon=True)
+    t.start()
+
+    # Cek apakah SSL cert tersedia
+    cert_file = os.path.join(os.path.dirname(__file__), 'cert.pem')
+    key_file  = os.path.join(os.path.dirname(__file__), 'key.pem')
+    use_ssl = os.path.exists(cert_file) and os.path.exists(key_file)
+
+    import socket
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+
+    print("======================================================")
+    print(" Server Vision-to-Audio Aktif")
+    print("------------------------------------------------------")
+    if use_ssl:
+        print(f" Lokal   : https://127.0.0.1:5000")
+        print(f" Jaringan: https://{local_ip}:5000")
+        print(" (Gunakan HTTPS agar kamera device bisa aktif)")
+    else:
+        print(f" Lokal   : http://127.0.0.1:5000")
+        print(f" Jaringan: http://{local_ip}:5000")
+        print(" [!] cert.pem / key.pem tidak ditemukan.")
+        print("     Kamera device TIDAK akan berfungsi tanpa HTTPS.")
+    print("======================================================")
+
+    ssl_ctx = None
+    if use_ssl:
+        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_ctx.load_cert_chain(cert_file, key_file)
+
+    app.run(
+        host='0.0.0.0',
+        port=5000,
+        debug=False,
+        use_reloader=False,
+        ssl_context=ssl_ctx
+    )

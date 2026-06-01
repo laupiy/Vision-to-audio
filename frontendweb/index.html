@@ -1,16 +1,170 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vision to Audio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="background-effects">
+        <div class="glow-circle blue-glow"></div>
+        <div class="glow-circle purple-glow"></div>
+    </div>
 
-  <!DOCTYPE html>
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>RupiahVision AI UI/UX Design</title>
-      <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
-    </head>
+    <div class="app-container">
+        <header class="app-header">
+            <h1 class="logo">
+                <span class="logo-accent">Vision</span> to Audio
+            </h1>
+            <p class="subtitle">Deteksi Uang Kertas & Suara</p>
+        </header>
 
-    <body>
-      <div id="root"></div>
-      <script type="module" src="/src/main.tsx"></script>
-    </body>
-  </html>
-  
+        <main class="main-content">
+            <!-- Camera Section -->
+            <section class="camera-section glass-panel">
+                <div class="camera-header">
+                    <h2>Live Feed</h2>
+                    <div class="status-indicator">
+                        <span class="dot offline" id="status-dot"></span>
+                        <span id="status-text">Kamera Mati</span>
+                    </div>
+                </div>
+                
+                <div class="camera-container" id="camera-container">
+                    <!-- Server camera stream (MJPEG) -->
+                    <img id="video-feed" src="" alt="Camera Feed" style="display: none;">
+                    
+                    <!-- Device camera stream (getUserMedia) -->
+                    <video id="device-video" autoplay playsinline muted style="display: none;"></video>
+                    
+                    <!-- Processed frame overlay (device mode) -->
+                    <img id="processed-frame" src="" alt="Processed" style="display: none;">
+
+                    <!-- Hidden canvas for capturing device frames -->
+                    <canvas id="capture-canvas" style="display: none;"></canvas>
+
+                    <div class="camera-placeholder" id="camera-placeholder">
+                        <div class="placeholder-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
+                        </div>
+                        <p>Kamera belum aktif</p>
+                    </div>
+                    <!-- Guidelines / Overlay for Guide Mode -->
+                    <div class="guide-overlay" id="guide-overlay">
+                        <div class="guide-box"></div>
+                    </div>
+                </div>
+
+                <div class="camera-controls">
+                    <button id="btn-toggle-camera" class="btn primary-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"></path><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+                        <span>Nyalakan Kamera</span>
+                    </button>
+                    <button id="btn-toggle-mode" class="btn secondary-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"></path><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                        <span id="mode-text">Mode: Guide</span>
+                    </button>
+                </div>
+
+                <!-- Camera Source Toggle -->
+                <div class="camera-source-toggle">
+                    <button id="btn-source-server" class="btn source-btn active-source">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                        <span>Kamera Server</span>
+                    </button>
+                    <button id="btn-source-device" class="btn source-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+                        <span>Kamera Device</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Settings Section -->
+            <section class="settings-section glass-panel">
+                <div class="settings-header">
+                    <h2>Pengaturan Deteksi</h2>
+                    <p class="settings-desc">Sesuaikan parameter untuk akurasi terbaik di lingkungan Anda.</p>
+                </div>
+
+                <div class="sliders-container">
+                    <!-- Brightness -->
+                    <div class="slider-group">
+                        <div class="slider-info">
+                            <label for="slider-brightness">Brightness Kamera</label>
+                            <span class="slider-value" id="val-brightness">50%</span>
+                        </div>
+                        <input type="range" id="slider-brightness" class="custom-slider" min="0" max="100" value="50">
+                    </div>
+
+                    <!-- Contrast -->
+                    <div class="slider-group">
+                        <div class="slider-info">
+                            <label for="slider-contrast">Contrast</label>
+                            <span class="slider-value" id="val-contrast">50%</span>
+                        </div>
+                        <input type="range" id="slider-contrast" class="custom-slider" min="0" max="100" value="50">
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <!-- Confidence Threshold -->
+                    <div class="slider-group">
+                        <div class="slider-info">
+                            <label for="slider-confidence">Confidence Threshold</label>
+                            <span class="slider-value" id="val-confidence">0.75</span>
+                        </div>
+                        <input type="range" id="slider-confidence" class="custom-slider accent-purple" min="0" max="100" value="75">
+                        <p class="helper-text">Nilai minimum kecocokan agar uang terdeteksi valid.</p>
+                    </div>
+
+                    <!-- Overlap Threshold -->
+                    <div class="slider-group">
+                        <div class="slider-info">
+                            <label for="slider-overlap">Overlap Threshold (NMS)</label>
+                            <span class="slider-value" id="val-overlap">0.30</span>
+                        </div>
+                        <input type="range" id="slider-overlap" class="custom-slider accent-purple" min="0" max="100" value="30">
+                        <p class="helper-text">Toleransi tumpang tindih kotak deteksi.</p>
+                    </div>
+
+                    <!-- Opacity Threshold -->
+                    <div class="slider-group">
+                        <div class="slider-info">
+                            <label for="slider-opacity">Opacity Threshold</label>
+                            <span class="slider-value" id="val-opacity">0.80</span>
+                        </div>
+                        <input type="range" id="slider-opacity" class="custom-slider accent-purple" min="0" max="100" value="80">
+                    </div>
+                </div>
+
+            </section>
+        </main>
+
+        <!-- Result / Output Section -->
+        <section class="result-section glass-panel">
+            <div class="result-content">
+                <div class="audio-wave" id="audio-wave">
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                </div>
+                <div class="detection-text">
+                    <h3>Hasil Deteksi:</h3>
+                    <p id="result-label" class="result-label-text">Belum ada deteksi</p>
+                </div>
+            </div>
+            <button id="btn-replay-audio" class="btn icon-btn" title="Ulangi Audio">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+            </button>
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
