@@ -1,140 +1,157 @@
+"""
+====================================================================
+template_matcher.py — Template Matching untuk Konfirmasi Nominal
+====================================================================
+Strategi:
+  - Template lembar (*.jpeg): digunakan untuk VALIDASI dan KONFIRMASI
+    Cocokkan ROI vs semua lembar uang, ambil yang paling mirip.
+    Karena ORB feature matching invariant terhadap skala & rotasi,
+    ini adalah cara terbaik dengan dataset yang ada.
+
+  - Template angka (*.jpg/*.png): TIDAK dipakai untuk deteksi nominal
+    karena terlalu kecil & tidak cukup fitur unik untuk ORB.
+    Disimpan untuk referensi saja.
+
+Catatan penting:
+  - Deteksi nominal UTAMA tetap oleh color_detector (HSV).
+  - Template matching di sini hanya sebagai KONFIRMASI / TIE-BREAKER.
+  - Jika skor template rendah, bukan berarti salah — bisa karena
+    pencahayaan atau sudut kamera. HSV tetap diprioritaskan.
+====================================================================
+"""
+
 import cv2
 import numpy as np
 from pathlib import Path
-
-from modules.preprocessing import preprocess_for_template
 
 
 TEMPLATE_DIR = Path("templates")
 
 NOMINAL_LABELS = {
     "100000": "Rp100.000",
-    "50000": "Rp50.000",
-    "20000": "Rp20.000",
-    "10000": "Rp10.000",
-    "5000": "Rp5.000",
-    "2000": "Rp2.000",
-    "1000": "Rp1.000",
+    "50000" : "Rp50.000",
+    "20000" : "Rp20.000",
+    "10000" : "Rp10.000",
+    "5000"  : "Rp5.000",
+    "2000"  : "Rp2.000",
+    "1000"  : "Rp1.000",
 }
 
+LEMBAR_LABELS = {
+    "lembar_100000": "Rp100.000",
+    "lembar_50000" : "Rp50.000",
+    "lembar_20000" : "Rp20.000",
+    "lembar_10000" : "Rp10.000",
+    "lembar_5000"  : "Rp5.000",
+    "lembar_2000"  : "Rp2.000",
+    "lembar_1000"  : "Rp1.000",
+}
 
-def crop_area_angka(roi):
+# ------------------------------------------------------------------ #
+#  CACHE & ORB SETUP                                                 #
+# ------------------------------------------------------------------ #
+
+_lembar_cache = []
+_orb = cv2.ORB_create(nfeatures=800)
+_bf  = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+
+def _load_lembar_templates():
     """
-    Mengambil area angka nominal dari ROI.
-    Untuk uang landscape, angka nominal biasanya ada di kiri atas.
+    Load semua template lembar uang penuh (.jpeg).
+    Template ini digunakan untuk mencocokkan ROI dari kamera.
     """
-    h, w = roi.shape[:2]
+    global _lembar_cache
+    if _lembar_cache:
+        return _lembar_cache
 
-    x1 = 0
-    y1 = 0
-    x2 = int(w * 0.50)
-    y2 = int(h * 0.50)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
-    area_angka = roi[y1:y2, x1:x2]
+    for path in TEMPLATE_DIR.glob("*.jpeg"):
+        key = path.stem
+        if key not in LEMBAR_LABELS:
+            continue
 
-    return area_angka
+        img = cv2.imread(str(path))
+        if img is None:
+            continue
 
+        # Resize ke tinggi standar untuk konsistensi matching
+        h, w = img.shape[:2]
+        target_h = 240
+        scale = target_h / h
+        img_r = cv2.resize(img, (int(w * scale), target_h))
 
-def load_templates():
-    """
-    Membaca template dari folder templates.
-    Mendukung png, jpg, dan jpeg.
-    Nama file harus berupa nominal:
-    20000.jpg berarti Rp20.000
-    """
-    templates = []
+        gray = cv2.cvtColor(img_r, cv2.COLOR_BGR2GRAY)
+        gray = clahe.apply(gray)
 
-    extensions = ["*.png", "*.jpg", "*.jpeg"]
+        kp, des = _orb.detectAndCompute(gray, None)
 
-    for ext in extensions:
-        for path in TEMPLATE_DIR.glob(ext):
-            key = path.stem
-
-            if key not in NOMINAL_LABELS:
-                continue
-
-            image = cv2.imread(str(path))
-
-            if image is None:
-                print(f"[WARNING] Template gagal dibaca: {path}")
-                continue
-
-            processed_template = preprocess_for_template(image)
-
-            templates.append({
-                "key": key,
-                "label": NOMINAL_LABELS[key],
-                "path": path,
-                "image": processed_template,
+        if des is not None and len(kp) >= 15:
+            _lembar_cache.append({
+                "key"  : key,
+                "label": LEMBAR_LABELS[key],
+                "kp"   : kp,
+                "des"  : des,
             })
 
-    return templates
+    return _lembar_cache
 
 
-def match_template_nominal(roi):
+# ------------------------------------------------------------------ #
+#  FUNGSI UTAMA                                                      #
+# ------------------------------------------------------------------ #
+
+def cocokkan_template(roi: np.ndarray) -> tuple[str, float, list]:
     """
-    Mencocokkan area angka nominal dengan template angka.
-    Return:
-    - label terbaik
-    - skor terbaik
-    - semua skor
-    - status kekuatan skor
+    Mencocokkan ROI dengan template lembar uang menggunakan ORB.
+
+    Mengembalikan (label_terbaik, skor_terbaik, semua_skor).
+
+    Interpretasi skor:
+    - >= 0.55 → kuat, bisa menjadi hasil final
+    - 0.35 - 0.54 → sedang, bisa konfirmasi HSV
+    - < 0.35 → lemah, abaikan / percaya HSV
     """
-    templates = load_templates()
+    if roi is None or roi.size == 0:
+        return "Tidak ada template", 0.0, []
 
-    if len(templates) == 0:
-        return {
-            "label": "Tidak ada template",
-            "score": 0.0,
-            "status": "lemah",
-            "all_scores": []
-        }
+    lembar_tmps = _load_lembar_templates()
+    if not lembar_tmps:
+        return "Tidak ada template", 0.0, []
 
-    # Crop area angka dari ROI
-    area_angka = crop_area_angka(roi)
+    # Preprocessing ROI: resize dan normalize
+    h, w = roi.shape[:2]
+    target_h = 200
+    scale = target_h / max(h, 1)
+    roi_r = cv2.resize(roi, (int(w * scale), target_h))
 
-    # Preprocessing ROI angka
-    roi_processed = preprocess_for_template(area_angka)
+    gray_roi = cv2.cvtColor(roi_r, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray_roi = clahe.apply(gray_roi)
+
+    kp_roi, des_roi = _orb.detectAndCompute(gray_roi, None)
+
+    if des_roi is None or len(kp_roi) < 10:
+        return "Tidak yakin", 0.0, []
 
     best_label = "Tidak yakin"
     best_score = 0.0
     all_scores = []
 
-    for item in templates:
-        template = item["image"]
-
-        # Hindari template lebih besar daripada ROI
-        if template.shape[0] > roi_processed.shape[0] or template.shape[1] > roi_processed.shape[1]:
+    for item in lembar_tmps:
+        try:
+            matches = _bf.match(item["des"], des_roi)
+        except cv2.error:
             continue
 
-        # Multi-scale sederhana
-        scale_scores = []
+        # Good match: Hamming distance < 55
+        good = [m for m in matches if m.distance < 55]
 
-        for scale in np.linspace(0.65, 1.25, 13):
-            new_w = int(template.shape[1] * scale)
-            new_h = int(template.shape[0] * scale)
-
-            if new_w <= 5 or new_h <= 5:
-                continue
-
-            resized_template = cv2.resize(template, (new_w, new_h))
-
-            if resized_template.shape[0] > roi_processed.shape[0] or resized_template.shape[1] > roi_processed.shape[1]:
-                continue
-
-            result = cv2.matchTemplate(
-                roi_processed,
-                resized_template,
-                cv2.TM_CCOEFF_NORMED
-            )
-
-            _, max_val, _, _ = cv2.minMaxLoc(result)
-            scale_scores.append(max_val)
-
-        if len(scale_scores) == 0:
-            score = 0.0
-        else:
-            score = float(max(scale_scores))
+        # Normalisasi: relatif terhadap keypoints template
+        # 30% dari keypoints cocok = skor 1.0
+        n_tmpl = max(len(item["kp"]), 1)
+        score = min(len(good) / (n_tmpl * 0.30), 1.0)
 
         all_scores.append((item["label"], score))
 
@@ -142,38 +159,5 @@ def match_template_nominal(roi):
             best_score = score
             best_label = item["label"]
 
-    if best_score >= 0.78:
-        status = "kuat"
-    elif best_score >= 0.68:
-        status = "sedang"
-    else:
-        status = "lemah"
-
-    all_scores = sorted(all_scores, key=lambda x: x[1], reverse=True)
-
-    return {
-        "label": best_label,
-        "score": best_score,
-        "status": status,
-        "all_scores": all_scores
-    }
-def cocokkan_template(roi):
-    """
-    Wrapper agar kompatibel dengan main.py lama.
-
-    main.py memanggil:
-        template_matcher.cocokkan_template(roi)
-
-    Sedangkan versi baru memakai:
-        match_template_nominal(roi)
-
-    Fungsi ini menyamakan format return:
-        hasil_template, skor_template, semua_skor
-    """
-    hasil = match_template_nominal(roi)
-
-    label = hasil.get("label", "Tidak ada template")
-    score = hasil.get("score", 0.0)
-    all_scores = hasil.get("all_scores", [])
-
-    return label, score, all_scores
+    all_scores.sort(key=lambda x: x[1], reverse=True)
+    return best_label, best_score, all_scores

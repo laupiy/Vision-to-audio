@@ -2,13 +2,12 @@
 ====================================================================
 config.py — Konfigurasi Global Vision-to-Audio Bridge
 ====================================================================
-Semua konstanta numerik dan definisi warna HSV disentralisasi
-di sini agar mudah dikalibrasi tanpa menyentuh logika utama.
-
-Versi perbaikan:
-  - Rp20.000 dibuat lebih mudah terdeteksi saat warna hijau pucat/redup
-  - Rp2.000 dibuat lebih sulit menang karena abu-abu sering false positive
-  - Ditambahkan parameter preprocessing dan template threshold
+Versi perbaikan v2:
+  - Range HSV per nominal diperbaiki dan diperketat (bukan lagi catch-all)
+  - Rp100.000 merah: range H diperluas dan threshold persentase dinaikkan
+  - Rp2.000 abu-abu: bobot sangat rendah agar tidak jadi false positive
+  - PERSENTASE_THRESHOLD dinaikkan agar ruang kosong tidak dideteksi
+  - SKOR_DIFF_THRESHOLD dinaikkan agar keputusan lebih tegas
 ====================================================================
 """
 
@@ -40,23 +39,16 @@ GUIDE_Y_RATIO = 0.26
 GUIDE_W_RATIO = 0.84
 GUIDE_H_RATIO = 0.48
 
-# Untuk demo, biarkan False agar uang asli tidak gampang ditolak
-VALIDASI_KETAT_GUIDE = False
+# Aktifkan validasi agar kotak kosong tidak diproses
+VALIDASI_KETAT_GUIDE = True
 
 # ------------------------------------------------------------------ #
 #  PARAMETER PREPROCESSING                                           #
 # ------------------------------------------------------------------ #
 
-# Aktifkan preprocessing agar citra lebih stabil terhadap pencahayaan
 GUNAKAN_PREPROCESSING = True
-
-# Gamma > 1 membantu mencerahkan gambar yang redup
 GAMMA_VALUE = 1.25
-
-# Saturation boost membantu warna uang yang pucat agar lebih terlihat
 SATURATION_BOOST = 1.25
-
-# CLAHE untuk memperbaiki kontras pencahayaan
 CLAHE_CLIP_LIMIT = 2.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 
@@ -64,31 +56,26 @@ CLAHE_TILE_GRID_SIZE = (8, 8)
 #  PARAMETER AKURASI KEPUTUSAN WARNA                                 #
 # ------------------------------------------------------------------ #
 
-# Dibuat sedikit lebih rendah agar uang dengan warna pucat tetap bisa terbaca
-PERSENTASE_THRESHOLD = 4.0
+# Dinaikkan: minimal 12% piksel harus cocok baru dianggap terdeteksi
+# Ini mencegah ruang kosong / background terdeteksi sebagai uang
+PERSENTASE_THRESHOLD = 12.0
 
-# Jika selisih skor terlalu kecil, hasil dianggap tidak yakin
-SKOR_DIFF_THRESHOLD = 1.2
+# Dinaikkan: selisih skor harus cukup besar agar tidak ambigu
+SKOR_DIFF_THRESHOLD = 5.0
 
 # ------------------------------------------------------------------ #
 #  PARAMETER KONDISI CAHAYA                                          #
 # ------------------------------------------------------------------ #
 
-# Jangan terlalu tinggi, karena nanti kondisi ruangan biasa dianggap gelap
 V_LIGHTING_THRESHOLD = 40.0
 
 # ------------------------------------------------------------------ #
 #  PARAMETER TEMPLATE MATCHING                                       #
 # ------------------------------------------------------------------ #
 
-# Template kuat baru boleh mengalahkan HSV
-TEMPLATE_THRESHOLD_KUAT = 0.78
-
-# Template sedang hanya dipakai untuk membantu, bukan langsung menang
-TEMPLATE_THRESHOLD_SEDANG = 0.68
-
-# Khusus koreksi HSV Rp2.000 yang sering false positive
-TEMPLATE_THRESHOLD_KOREKSI_2000 = 0.72
+TEMPLATE_THRESHOLD_KUAT = 0.55
+TEMPLATE_THRESHOLD_SEDANG = 0.35
+TEMPLATE_THRESHOLD_KOREKSI_2000 = 0.45
 
 # ------------------------------------------------------------------ #
 #  PARAMETER SUARA                                                   #
@@ -106,143 +93,109 @@ TAMPILKAN_INFO_HYBRID = True
 #  DEFINISI RANGE WARNA HSV UNTUK SETIAP NOMINAL RUPIAH              #
 # ------------------------------------------------------------------ #
 #
-# Catatan:
-# H = 0–179
-# S = 0–255
-# V = 0–255
+# Catatan penting range HSV OpenCV:
+# H = 0–179 (merah ada di 0-10 DAN 160-179)
+# S = 0–255 (makin tinggi = makin jenuh/pekat)
+# V = 0–255 (makin tinggi = makin terang)
 #
-# Perbaikan utama:
-# - Rp20.000: S minimum diturunkan agar hijau pucat tetap masuk
-# - Rp2.000 : S maksimum diperkecil dan bobot diturunkan agar tidak mudah menang
+# PERBAIKAN UTAMA:
+# - Setiap range sekarang SPESIFIK ke warna dominan masing-masing nominal
+# - S minimum dinaikkan (>=40) agar abu-abu/warna pucat tidak masuk semua range
+# - Range tidak lagi tumpang tindih berlebihan
 # ------------------------------------------------------------------ #
 
 NOMINAL_HSV = [
     {
-        # ---- Rp100.000 — Merah / Pink ----
+        # ---- Rp100.000 — Merah / Merah Muda ----
+        # Uang 100rb didominasi warna merah terang dan pink
+        # H: 0-10 (merah bawah) + 160-179 (merah atas)
+        # S: minimal 50 agar tidak masuk ke warna kulit/putih
         "nama"  : "Rp100.000",
         "suara" : "Seratus ribu rupiah",
-        "bobot" : 1.25,
-        "lower1": np.array([0,   9,  64], dtype=np.uint8),
-        "upper1": np.array([12, 255, 255], dtype=np.uint8),
-        "lower2": np.array([155, 60,  55], dtype=np.uint8),
+        "bobot" : 1.50,
+        "lower1": np.array([0,   50,  50], dtype=np.uint8),
+        "upper1": np.array([10, 255, 255], dtype=np.uint8),
+        "lower2": np.array([160, 50,  50], dtype=np.uint8),
         "upper2": np.array([179, 255, 255], dtype=np.uint8),
-        "ranges": [
-            (np.array([0, 9, 93], dtype=np.uint8), np.array([179, 153, 248], dtype=np.uint8)),
-            (np.array([0, 11, 70], dtype=np.uint8), np.array([179, 140, 221], dtype=np.uint8)),
-            (np.array([0, 10, 64], dtype=np.uint8), np.array([179, 142, 232], dtype=np.uint8))
-        ]
+        "ranges": []
     },
     {
-        # ---- Rp50.000 — Biru ----
+        # ---- Rp50.000 — Biru Tua / Biru Dongker ----
+        # H: 100-130 (biru murni)
+        # S: minimal 60 agar langit/dinding biru tidak masuk
         "nama"  : "Rp50.000",
         "suara" : "Lima puluh ribu rupiah",
-        "bobot" : 1.05,
-        "lower1": np.array([4,  18,  43], dtype=np.uint8),
-        "upper1": np.array([129, 153, 207], dtype=np.uint8),
+        "bobot" : 1.20,
+        "lower1": np.array([100, 60,  40], dtype=np.uint8),
+        "upper1": np.array([130, 255, 255], dtype=np.uint8),
         "lower2": None,
         "upper2": None,
-        "ranges": [
-            (np.array([5, 19, 45], dtype=np.uint8), np.array([129, 156, 223], dtype=np.uint8)),
-            (np.array([4, 18, 47], dtype=np.uint8), np.array([167, 155, 232], dtype=np.uint8)),
-            (np.array([6, 19, 43], dtype=np.uint8), np.array([150, 153, 207], dtype=np.uint8)),
-            (np.array([0, 2, 89], dtype=np.uint8), np.array([168, 121, 237], dtype=np.uint8)),
-            (np.array([0, 2, 78], dtype=np.uint8), np.array([176, 94, 237], dtype=np.uint8)),
-            (np.array([1, 2, 103], dtype=np.uint8), np.array([173, 88, 237], dtype=np.uint8)),
-            (np.array([0, 2, 76], dtype=np.uint8), np.array([173, 123, 237], dtype=np.uint8)),
-            (np.array([1, 2, 77], dtype=np.uint8), np.array([171, 107, 237], dtype=np.uint8)),
-            (np.array([9, 3, 98], dtype=np.uint8), np.array([135, 123, 178], dtype=np.uint8)),
-            (np.array([5, 3, 107], dtype=np.uint8), np.array([150, 104, 164], dtype=np.uint8))
-        ]
+        "ranges": []
     },
     {
         # ---- Rp20.000 — Hijau ----
+        # H: 40-90 (hijau, dari hijau-kuning sampai hijau-biru)
+        # S: minimal 50 agar daun/tumbuhan dengan pencahayaan redup tidak masuk
         "nama"  : "Rp20.000",
         "suara" : "Dua puluh ribu rupiah",
         "bobot" : 1.40,
-        "lower1": np.array([0,  5,  69], dtype=np.uint8),
-        "upper1": np.array([175, 96, 234], dtype=np.uint8),
+        "lower1": np.array([40,  50,  40], dtype=np.uint8),
+        "upper1": np.array([90, 255, 255], dtype=np.uint8),
         "lower2": None,
         "upper2": None,
-        "ranges": [
-            (np.array([24, 4, 69], dtype=np.uint8), np.array([170, 98, 242], dtype=np.uint8)),
-            (np.array([0, 5, 83], dtype=np.uint8), np.array([178, 96, 243], dtype=np.uint8)),
-            (np.array([3, 4, 93], dtype=np.uint8), np.array([175, 96, 234], dtype=np.uint8))
-        ]
+        "ranges": []
     },
     {
-        # ---- Rp10.000 — Ungu ----
+        # ---- Rp10.000 — Ungu / Violet ----
+        # H: 130-155 (ungu/violet)
+        # S: minimal 40
         "nama"  : "Rp10.000",
         "suara" : "Sepuluh ribu rupiah",
-        "bobot" : 1.05,
-        "lower1": np.array([4, 5,  53], dtype=np.uint8),
-        "upper1": np.array([165, 82, 203], dtype=np.uint8),
+        "bobot" : 1.20,
+        "lower1": np.array([130, 40,  40], dtype=np.uint8),
+        "upper1": np.array([155, 255, 255], dtype=np.uint8),
         "lower2": None,
         "upper2": None,
-        "ranges": [
-            (np.array([19, 5, 53], dtype=np.uint8), np.array([166, 96, 212], dtype=np.uint8)),
-            (np.array([11, 5, 54], dtype=np.uint8), np.array([165, 82, 223], dtype=np.uint8)),
-            (np.array([4, 6, 93], dtype=np.uint8), np.array([174, 88, 203], dtype=np.uint8)),
-            (np.array([2, 2, 107], dtype=np.uint8), np.array([171, 47, 237], dtype=np.uint8)),
-            (np.array([3, 2, 59], dtype=np.uint8), np.array([173, 66, 237], dtype=np.uint8)),
-            (np.array([0, 1, 94], dtype=np.uint8), np.array([170, 82, 237], dtype=np.uint8)),
-            (np.array([14, 5, 93], dtype=np.uint8), np.array([170, 43, 169], dtype=np.uint8)),
-            (np.array([5, 2, 108], dtype=np.uint8), np.array([173, 81, 237], dtype=np.uint8))
-        ]
+        "ranges": []
     },
     {
-        # ---- Rp5.000 — Coklat / Kuning Keemasan ----
+        # ---- Rp5.000 — Coklat / Orange Tua ----
+        # H: 10-25 (orange/coklat)
+        # S: minimal 60 agar tidak tumpang tindih dengan kulit
         "nama"  : "Rp5.000",
         "suara" : "Lima ribu rupiah",
-        "bobot" : 1.0,
-        "lower1": np.array([0,   8,   62], dtype=np.uint8),
-        "upper1": np.array([173, 73, 207], dtype=np.uint8),
+        "bobot" : 1.20,
+        "lower1": np.array([10,  60,  40], dtype=np.uint8),
+        "upper1": np.array([25, 255, 255], dtype=np.uint8),
         "lower2": None,
         "upper2": None,
-        "ranges": [
-            (np.array([1, 11, 62], dtype=np.uint8), np.array([178, 89, 218], dtype=np.uint8)),
-            (np.array([1, 8, 73], dtype=np.uint8), np.array([176, 73, 218], dtype=np.uint8)),
-            (np.array([0, 10, 85], dtype=np.uint8), np.array([178, 75, 207], dtype=np.uint8)),
-            (np.array([0, 5, 52], dtype=np.uint8), np.array([173, 104, 184], dtype=np.uint8)),
-            (np.array([0, 8, 92], dtype=np.uint8), np.array([178, 79, 170], dtype=np.uint8)),
-            (np.array([2, 2, 102], dtype=np.uint8), np.array([173, 92, 237], dtype=np.uint8)),
-            (np.array([0, 5, 100], dtype=np.uint8), np.array([177, 62, 187], dtype=np.uint8)),
-            (np.array([0, 4, 57], dtype=np.uint8), np.array([175, 97, 142], dtype=np.uint8))
-        ]
+        "ranges": []
     },
     {
-        # ---- Rp2.000 — Abu-abu ----
+        # ---- Rp2.000 — Abu-abu / Kebiruan Pucat ----
+        # Warna abu-abu paling susah: S rendah, V sedang
+        # Diberi bobot sangat rendah agar tidak mudah menang
+        # Hanya menang kalau nominal lain semua benar-benar tidak ada
         "nama"  : "Rp2.000",
         "suara" : "Dua ribu rupiah",
-        "bobot" : 0.20,
-        "lower1": np.array([3,   2,   36], dtype=np.uint8),
-        "upper1": np.array([170, 92,  223], dtype=np.uint8),
+        "bobot" : 0.60,
+        "lower1": np.array([90,  15,  60], dtype=np.uint8),
+        "upper1": np.array([130, 80, 200], dtype=np.uint8),
         "lower2": None,
         "upper2": None,
-        "ranges": [
-            (np.array([8, 3, 36], dtype=np.uint8), np.array([170, 100, 230], dtype=np.uint8)),
-            (np.array([6, 6, 43], dtype=np.uint8), np.array([170, 93, 223], dtype=np.uint8)),
-            (np.array([3, 2, 82], dtype=np.uint8), np.array([170, 92, 225], dtype=np.uint8)),
-            (np.array([13, 6, 84], dtype=np.uint8), np.array([160, 80, 165], dtype=np.uint8)),
-            (np.array([13, 6, 82], dtype=np.uint8), np.array([158, 76, 162], dtype=np.uint8)),
-            (np.array([83, 9, 63], dtype=np.uint8), np.array([163, 78, 141], dtype=np.uint8)),
-            (np.array([90, 4, 63], dtype=np.uint8), np.array([163, 75, 184], dtype=np.uint8)),
-            (np.array([10, 5, 69], dtype=np.uint8), np.array([146, 94, 207], dtype=np.uint8)),
-            (np.array([8, 2, 75], dtype=np.uint8), np.array([158, 83, 237], dtype=np.uint8))
-        ]
+        "ranges": []
     },
     {
-        # ---- Rp1.000 — Hijau Kebiruan / Teal ----
+        # ---- Rp1.000 — Hijau Kekuningan / Kuning-Hijau ----
+        # H: 25-45 (kuning-hijau, berbeda dari Rp20.000 yang lebih murni hijau)
+        # S: minimal 50
         "nama"  : "Rp1.000",
         "suara" : "Seribu rupiah",
-        "bobot" : 0.90,
-        "lower1": np.array([2,  4,  33], dtype=np.uint8),
-        "upper1": np.array([173, 77, 221], dtype=np.uint8),
+        "bobot" : 1.10,
+        "lower1": np.array([25,  50,  40], dtype=np.uint8),
+        "upper1": np.array([45, 255, 255], dtype=np.uint8),
         "lower2": None,
         "upper2": None,
-        "ranges": [
-            (np.array([2, 4, 42], dtype=np.uint8), np.array([175, 92, 224], dtype=np.uint8)),
-            (np.array([4, 6, 33], dtype=np.uint8), np.array([173, 105, 230], dtype=np.uint8)),
-            (np.array([3, 6, 99], dtype=np.uint8), np.array([173, 77, 221], dtype=np.uint8))
-        ]
-    },
+        "ranges": []
+    }
 ]

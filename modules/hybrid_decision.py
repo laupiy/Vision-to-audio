@@ -2,15 +2,13 @@
 ====================================================================
 hybrid_decision.py — Penggabungan Keputusan HSV + Template Matching
 ====================================================================
-Modul ini menggabungkan dua hasil deteksi:
-1. HSV Color Detection
-2. Template Matching angka nominal
-
-Perbaikan versi ini:
-- Threshold template dinaikkan agar skor lemah tidak langsung menang.
-- Template skor 0.57 tidak boleh mengubah hasil final.
-- Rp2.000 dari HSV tidak langsung dipercaya karena abu-abu sering false positive.
-- Jika HSV dan Template berbeda tapi skor template belum kuat, hasil menjadi "Tidak yakin".
+Versi perbaikan:
+- Threshold disesuaikan dengan skor cv2.matchTemplate (TM_CCOEFF_NORMED)
+  yang berkisar 0.0 - 1.0, bukan skor ORB lama.
+- Template dengan skor >= 0.55 dianggap kuat (bisa override HSV)
+- Template dengan skor >= 0.35 dianggap sedang (konfirmasi saja)
+- Jika HSV dan Template sama → langsung percaya (tidak perlu threshold tinggi)
+- Jika konflik → HSV diprioritaskan kecuali template sangat kuat
 ====================================================================
 """
 
@@ -19,18 +17,14 @@ Perbaikan versi ini:
 #  KONFIGURASI THRESHOLD TEMPLATE                                    #
 # ------------------------------------------------------------------ #
 
-# Template baru dianggap kuat jika skor sangat tinggi.
-# Template kuat boleh menjadi hasil final.
-THRESHOLD_TEMPLATE_KUAT = 0.78
+# matchTemplate TM_CCOEFF_NORMED: skor >= 0.55 dianggap kuat
+THRESHOLD_TEMPLATE_KUAT = 0.55
 
-# Template sedang hanya dianggap sinyal bantuan.
-# Jika berbeda dengan HSV, jangan langsung dipakai.
-THRESHOLD_TEMPLATE_SEDANG = 0.68
+# Skor >= 0.35 dianggap sedang (bisa konfirmasi HSV)
+THRESHOLD_TEMPLATE_SEDANG = 0.35
 
-# Khusus untuk koreksi HSV Rp2.000.
-# Rp2.000 sering false positive saat cahaya redup,
-# jadi template boleh mengoreksi Rp2.000 jika skornya cukup kuat.
-THRESHOLD_KOREKSI_RP2000 = 0.72
+# Threshold koreksi khusus Rp2.000 (abu-abu rawan false positive)
+THRESHOLD_KOREKSI_RP2000 = 0.45
 
 
 # ------------------------------------------------------------------ #
@@ -53,6 +47,7 @@ LABEL_TIDAK_YAKIN_TEMPLATE = {
     "Tidak yakin (template)",
     "Tidak yakin",
     "Template lemah",
+    "Objek bukan uang",
     None,
 }
 
@@ -62,25 +57,14 @@ LABEL_TIDAK_YAKIN_TEMPLATE = {
 # ------------------------------------------------------------------ #
 
 def status_template(skor_template: float) -> str:
-    """
-    Mengubah skor template menjadi status:
-    - kuat
-    - sedang
-    - lemah
-    """
     if skor_template >= THRESHOLD_TEMPLATE_KUAT:
         return "kuat"
-
     if skor_template >= THRESHOLD_TEMPLATE_SEDANG:
         return "sedang"
-
     return "lemah"
 
 
 def label_valid_nominal(label: str) -> bool:
-    """
-    Mengecek apakah label adalah nominal uang, bukan status error.
-    """
     return label not in LABEL_TIDAK_YAKIN_HSV and label not in LABEL_TIDAK_YAKIN_TEMPLATE
 
 
@@ -96,19 +80,18 @@ def gabungkan_keputusan(
     """
     Menggabungkan hasil HSV dan Template Matching.
 
-    Aturan utama:
-    1. Jika template kuat >= 0.78, template boleh menjadi final.
-    2. Jika template sedang 0.68 - 0.77 dan sama dengan HSV, hasil dianggap yakin.
-    3. Jika template sedang tapi berbeda dengan HSV, hasil "Tidak yakin".
-    4. Jika template lemah < 0.68, jangan gunakan template.
-    5. Khusus HSV Rp2.000:
-       - Rp2.000 sering false positive karena abu-abu.
-       - Jika template mengarah ke nominal lain dengan skor >= 0.72,
-         gunakan template.
-       - Jika template lemah, jangan langsung percaya Rp2.000.
+    Prioritas keputusan:
+    1. Jika keduanya sama → langsung percaya (sumber: HSV + Template cocok)
+    2. Jika HSV tidak yakin tapi template kuat → pakai template
+    3. Jika HSV yakin tapi template tidak tersedia → pakai HSV
+       (kecuali Rp2.000 karena abu-abu rawan false positive)
+    4. Jika konflik HSV vs Template:
+       - Template kuat (>= 0.55) → pakai template
+       - Template sedang (0.35-0.54) → tidak yakin (butuh kepastian lebih)
+       - Template lemah → pakai HSV
+    5. Rp2.000 dari HSV selalu butuh dukungan template (>= 0.45)
     """
 
-    # Pastikan skor berupa float
     try:
         skor_template = float(skor_template)
     except (TypeError, ValueError):
@@ -116,74 +99,75 @@ def gabungkan_keputusan(
 
     template_tidak_yakin = hasil_template in LABEL_TIDAK_YAKIN_TEMPLATE
     hsv_tidak_yakin = hasil_hsv in LABEL_TIDAK_YAKIN_HSV
-
     status = status_template(skor_template)
 
     # -------------------------------------------------------------- #
-    # 1. Template tidak tersedia / tidak yakin                       #
+    # 1. Keduanya tidak yakin                                        #
+    # -------------------------------------------------------------- #
+    if hsv_tidak_yakin and template_tidak_yakin:
+        return "Tidak yakin", "Keduanya tidak yakin"
+
+    # -------------------------------------------------------------- #
+    # 2. HSV dan Template sama → langsung percaya                    #
+    # -------------------------------------------------------------- #
+    if not hsv_tidak_yakin and not template_tidak_yakin:
+        if hasil_hsv == hasil_template:
+            # Sama-sama setuju → sangat yakin
+            if hasil_hsv == "Rp2.000" and skor_template < THRESHOLD_KOREKSI_RP2000:
+                # Rp2.000 tetap perlu threshold template cukup
+                return "Tidak yakin", "Rp2.000 perlu konfirmasi template lebih kuat"
+            return hasil_hsv, "HSV + Template cocok"
+
+    # -------------------------------------------------------------- #
+    # 3. Template tidak tersedia, andalkan HSV                       #
     # -------------------------------------------------------------- #
     if template_tidak_yakin:
         if hsv_tidak_yakin:
             return "Tidak yakin", "Tidak yakin"
-
-        # Khusus Rp2.000: jangan langsung percaya kalau template tidak ada
+        # Rp2.000 tidak boleh lolos tanpa template
         if hasil_hsv == "Rp2.000":
-            return "Tidak yakin", "HSV Rp2.000 tanpa dukungan template"
-
+            return "Tidak yakin", "Rp2.000 butuh dukungan template"
         return hasil_hsv, "HSV"
 
     # -------------------------------------------------------------- #
-    # 2. HSV tidak yakin, template kuat                              #
+    # 4. HSV tidak yakin, gunakan template jika cukup kuat           #
     # -------------------------------------------------------------- #
     if hsv_tidak_yakin:
         if skor_template >= THRESHOLD_TEMPLATE_KUAT:
             return hasil_template, "Template kuat"
-
-        return "Tidak yakin", f"Template {status}, HSV tidak yakin"
-
-    # -------------------------------------------------------------- #
-    # 3. HSV dan Template sama                                       #
-    # -------------------------------------------------------------- #
-    if hasil_hsv == hasil_template:
         if skor_template >= THRESHOLD_TEMPLATE_SEDANG:
-            return hasil_hsv, "HSV + Template cocok"
+            return "Tidak yakin", f"Template sedang, HSV tidak yakin"
+        return "Tidak yakin", "Template lemah, HSV tidak yakin"
 
-        # Kalau sama tapi template masih lemah, tetap boleh pakai HSV
-        # kecuali Rp2.000 karena rawan false positive
+    # -------------------------------------------------------------- #
+    # 5. Konflik: HSV yakin vs Template berbeda                      #
+    # -------------------------------------------------------------- #
+    if hasil_hsv != hasil_template:
+        # Rp2.000 dari HSV: template bisa mengoreksi
         if hasil_hsv == "Rp2.000":
-            return "Tidak yakin", "Rp2.000 belum cukup didukung template"
+            if skor_template >= THRESHOLD_KOREKSI_RP2000:
+                return hasil_template, "Template koreksi Rp2.000"
+            return "Tidak yakin", "Rp2.000 HSV, template lemah"
 
-        return hasil_hsv, "HSV"
+        # Nominal lain: template kuat bisa menang
+        if skor_template >= THRESHOLD_TEMPLATE_KUAT:
+            return hasil_template, "Template kuat override HSV"
 
-    # -------------------------------------------------------------- #
-    # 4. Template sangat kuat, boleh mengalahkan HSV                 #
-    # -------------------------------------------------------------- #
-    if skor_template >= THRESHOLD_TEMPLATE_KUAT:
-        return hasil_template, "Template kuat"
+        # Template sedang tapi berbeda: tidak yakin
+        if skor_template >= THRESHOLD_TEMPLATE_SEDANG:
+            return "Tidak yakin", "Konflik HSV vs Template sedang"
 
-    # -------------------------------------------------------------- #
-    # 5. Kasus khusus: HSV Rp2.000                                   #
-    # -------------------------------------------------------------- #
-    if hasil_hsv == "Rp2.000":
-        if hasil_template != "Rp2.000" and skor_template >= THRESHOLD_KOREKSI_RP2000:
-            return hasil_template, "Template koreksi Rp2.000"
-
-        return "Tidak yakin", "HSV Rp2.000 rawan false positive"
+        # Template lemah: percaya HSV
+        return hasil_hsv, "HSV diprioritaskan"
 
     # -------------------------------------------------------------- #
-    # 6. Template sedang tapi berbeda dengan HSV                     #
-    # -------------------------------------------------------------- #
-    if skor_template >= THRESHOLD_TEMPLATE_SEDANG:
-        return "Tidak yakin", "HSV dan Template berbeda"
-
-    # -------------------------------------------------------------- #
-    # 7. Template lemah, pakai HSV                                   #
+    # 6. Keduanya sama (sudah ditangani di atas, fallback)           #
     # -------------------------------------------------------------- #
     return hasil_hsv, "HSV"
 
 
 # ------------------------------------------------------------------ #
-#  FORMAT DEBUG UNTUK TAMPILAN                                       #
+#  FORMAT DEBUG                                                      #
 # ------------------------------------------------------------------ #
 
 def format_info_debug(
@@ -193,17 +177,6 @@ def format_info_debug(
     label_final: str,
     sumber: str
 ) -> list:
-    """
-    Menghasilkan daftar teks debug untuk ditampilkan di layar.
-
-    Return:
-        list of tuple:
-        [
-            ("teks", warna_bgr),
-            ...
-        ]
-    """
-
     try:
         skor_template = float(skor_template)
     except (TypeError, ValueError):
@@ -213,13 +186,11 @@ def format_info_debug(
 
     baris = []
 
-    # Baris HSV
     baris.append((
         f"HSV     : {hasil_hsv}",
         (0, 255, 255)
     ))
 
-    # Baris Template
     if status == "kuat":
         warna_template = (0, 255, 0)
     elif status == "sedang":
@@ -232,13 +203,11 @@ def format_info_debug(
         warna_template
     ))
 
-    # Baris Final
     baris.append((
         f"Final   : {label_final}",
         (100, 255, 100) if label_valid_nominal(label_final) else (0, 165, 255)
     ))
 
-    # Baris sumber keputusan
     baris.append((
         f"Sumber  : {sumber}",
         (200, 200, 200)

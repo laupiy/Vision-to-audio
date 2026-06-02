@@ -153,14 +153,13 @@ def ambil_roi_guide(frame: np.ndarray):
     """
     Mengambil ROI tetap dari kotak panduan tengah frame.
 
-    Mode ini dibuat sebagai mode utama untuk demo/asistensi karena ROI
-    otomatis berbasis kontur sangat sensitif terhadap cahaya, background,
-    kemiringan uang, dan tangan pengguna. Dengan guide, pengguna cukup
-    meletakkan uang di dalam kotak.
+    Perbaikan: ROI hanya dikembalikan jika ada objek signifikan
+    di dalam kotak (terdeteksi melalui deteksi tepi/kontur).
+    Jika kotak kosong (background saja), kembalikan None.
 
     Return:
-        roi  : area gambar di dalam kotak panduan
-        bbox : koordinat kotak (x, y, w, h)
+        (roi, bbox) jika ada objek di dalam kotak
+        None jika kotak kosong
     """
     if frame is None or frame.size == 0:
         return None
@@ -179,6 +178,31 @@ def ambil_roi_guide(frame: np.ndarray):
     bbox = (x1, y1, x2 - x1, y2 - y1)
 
     if roi is None or roi.size == 0:
+        return None
+
+    # ---- Cek apakah ada objek di dalam kotak panduan ---- #
+    # Gunakan deteksi tepi: jika edge density terlalu rendah,
+    # artinya kotak hanya berisi background polos (meja, dinding, dll)
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray_eq = clahe.apply(gray)
+    edges = cv2.Canny(gray_eq, 30, 100)
+
+    total_piksel = edges.shape[0] * edges.shape[1]
+    if total_piksel == 0:
+        return None
+
+    edge_density = np.sum(edges == 255) / total_piksel
+
+    # Jika edge density < 1.5%, kotak dianggap kosong
+    # Nilai ini sengaja rendah agar uang dengan sedikit detail tetap masuk
+    if edge_density < 0.015:
+        return None
+
+    # Juga cek variasi warna: background polos punya std rendah
+    hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    std_v = float(np.std(hsv_roi[:, :, 2]))
+    if std_v < 6.0:
         return None
 
     return roi, bbox

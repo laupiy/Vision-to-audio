@@ -15,7 +15,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const processedFrame = document.getElementById('processed-frame');
     const captureCanvas = document.getElementById('capture-canvas');
     const cameraPlaceholder = document.getElementById('camera-placeholder');
-    const guideOverlay = document.getElementById('guide-overlay');
     
     const resultLabel = document.getElementById('result-label');
     const audioWave = document.getElementById('audio-wave');
@@ -273,8 +272,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     processedFrame.src = data.frame;
                 }
 
-                // Update label
+                // Update label and dashboard
                 resultLabel.textContent = currentLabel;
+                const hsvVal = document.getElementById('hsv-value');
+                const tplVal = document.getElementById('template-score-value');
+                if(hsvVal) hsvVal.textContent = data.hsv || "-";
+                if(tplVal) tplVal.textContent = data.template_score || "-";
 
                 if (currentLabel.startsWith("Rp")) {
                     resultLabel.style.color = "var(--status-online)";
@@ -295,20 +298,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ============================================================
-    // MODE TOGGLE
+    // RESET SETTINGS
     // ============================================================
-    btnToggleMode.addEventListener('click', () => {
-        isGuideMode = !isGuideMode;
-        modeText.textContent = isGuideMode ? 'Mode: Guide' : 'Mode: Auto';
-        
-        if (isGuideMode) {
-            guideOverlay.style.display = 'flex';
-        } else {
-            guideOverlay.style.display = 'none';
-        }
-
-        sendParameterUpdate('mode', isGuideMode ? 'GUIDE' : 'AUTO');
-    });
+    const btnResetSettings = document.getElementById('btn-reset-settings');
+    if (btnResetSettings) {
+        btnResetSettings.addEventListener('click', () => {
+            sliders.brightness.value = 50;
+            sliders.contrast.value = 50;
+            updateSliderValue('brightness');
+            updateSliderValue('contrast');
+            sendParameterUpdate('brightness', 50);
+            sendParameterUpdate('contrast', 50);
+        });
+    }
 
     // ============================================================
     // AUDIO WAVE
@@ -346,6 +348,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 const currentLabel = data.label;
                 resultLabel.textContent = currentLabel;
+                
+                const hsvVal = document.getElementById('hsv-value');
+                const tplVal = document.getElementById('template-score-value');
+                if(hsvVal) hsvVal.textContent = data.hsv || "-";
+                if(tplVal) tplVal.textContent = data.template_score || "-";
 
                 if (currentLabel.startsWith("Rp")) {
                     resultLabel.style.color = "var(--status-online)";

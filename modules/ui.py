@@ -104,12 +104,7 @@ def gambar_bounding_box(
     is_fallback: bool
 ) -> None:
     """
-    Menggambar bounding box di sekitar ROI.
-
-    Warna kotak:
-    - Hijau  : nominal terdeteksi
-    - Oranye : ROI guide/manual
-    - Kuning : ROI auto/kontur tapi belum yakin
+    Menggambar bounding box di sekitar ROI. (Text dihapus sesuai request)
     """
     if bbox is None:
         return
@@ -125,19 +120,6 @@ def gambar_bounding_box(
 
     cv2.rectangle(frame, (x, y), (x + w, y + h), warna_box, 2)
 
-    teks_kecil = "ROI: GUIDE" if is_fallback else "ROI: AUTO"
-
-    cv2.putText(
-        frame,
-        teks_kecil,
-        (x, max(18, y - 8)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        warna_box,
-        1,
-        cv2.LINE_AA
-    )
-
 
 # ------------------------------------------------------------------ #
 #  HUD HASIL DETEKSI                                                  #
@@ -145,75 +127,9 @@ def gambar_bounding_box(
 
 def gambar_hud(frame: np.ndarray, label: str, fps: float) -> None:
     """
-    Menampilkan panel hasil deteksi di bagian bawah frame.
+    (Dikosongkan sesuai request agar teks tidak menghalangi video di frontend)
     """
-    tinggi_panel = 85
-    y_panel = config.FRAME_HEIGHT - tinggi_panel
-
-    overlay = frame.copy()
-    cv2.rectangle(
-        overlay,
-        (0, y_panel),
-        (config.FRAME_WIDTH, config.FRAME_HEIGHT),
-        (0, 0, 0),
-        cv2.FILLED
-    )
-    cv2.addWeighted(overlay, 0.62, frame, 0.38, 0, frame)
-
-    if label in {"Cahaya Kurang", "Cahaya kurang"}:
-        warna_teks = (0, 140, 255)       # Oranye
-    elif not is_nominal_valid(label):
-        warna_teks = (130, 130, 130)     # Abu-abu
-    else:
-        warna_teks = (0, 255, 100)       # Hijau
-
-    font = cv2.FONT_HERSHEY_DUPLEX
-    skala_font = 1.1
-    tebal_font = 2
-
-    label_tampil = str(label)
-    (lebar_teks, tinggi_teks), _ = cv2.getTextSize(
-        label_tampil,
-        font,
-        skala_font,
-        tebal_font
-    )
-
-    x_teks = max(10, (config.FRAME_WIDTH - lebar_teks) // 2)
-    y_teks = y_panel + 43
-
-    cv2.putText(
-        frame,
-        label_tampil,
-        (x_teks, y_teks),
-        font,
-        skala_font,
-        warna_teks,
-        tebal_font,
-        cv2.LINE_AA
-    )
-
-    cv2.putText(
-        frame,
-        f"FPS: {fps:.1f}",
-        (config.FRAME_WIDTH - 105, config.FRAME_HEIGHT - 12),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.48,
-        (200, 200, 200),
-        1,
-        cv2.LINE_AA
-    )
-
-    cv2.putText(
-        frame,
-        "Q:Keluar | D:Debug | T:Kalibrasi | M:Mode | H:Info",
-        (10, config.FRAME_HEIGHT - 12),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.38,
-        (180, 180, 180),
-        1,
-        cv2.LINE_AA
-    )
+    pass
 
 
 # ------------------------------------------------------------------ #
@@ -229,100 +145,9 @@ def gambar_info_hybrid(
     label_final: str = None
 ) -> None:
     """
-    Menampilkan informasi hasil HSV, Template, Final, dan sumber keputusan.
-
-    Catatan:
-    label_final dibuat opsional agar tetap kompatibel dengan main.py lama.
-    Kalau main.py belum mengirim label_final, baris Final tidak ditampilkan.
+    (Dikosongkan sesuai request agar teks tidak menghalangi video di frontend)
     """
-
-    try:
-        skor_template = float(skor_template)
-    except (TypeError, ValueError):
-        skor_template = 0.0
-
-    status = hybrid_decision.status_template(skor_template)
-
-    if status == "kuat":
-        warna_template = (0, 255, 0)
-    elif status == "sedang":
-        warna_template = (0, 165, 255)
-    else:
-        warna_template = (140, 140, 140)
-
-    # Jika label_final ada, tampilkan 4 baris.
-    # Jika tidak ada, tampilkan 3 baris agar kompatibel.
-    jumlah_baris = 4 if label_final is not None else 3
-    tinggi_overlay = 22 + jumlah_baris * 20
-
-    overlay = frame.copy()
-    cv2.rectangle(
-        overlay,
-        (0, 32),
-        (390, 32 + tinggi_overlay),
-        (0, 0, 0),
-        cv2.FILLED
-    )
-    cv2.addWeighted(overlay, 0.58, frame, 0.42, 0, frame)
-
-    x = 10
-    y = 55
-    jarak = 20
-
-    # Baris 1: HSV
-    cv2.putText(
-        frame,
-        f"HSV     : {hasil_hsv}",
-        (x, y),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        (0, 255, 255),
-        1,
-        cv2.LINE_AA
-    )
-
-    # Baris 2: Template
-    cv2.putText(
-        frame,
-        f"Template: {hasil_template} [{skor_template:.2f}] ({status})",
-        (x, y + jarak),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        warna_template,
-        1,
-        cv2.LINE_AA
-    )
-
-    # Baris 3 opsional: Final
-    if label_final is not None:
-        warna_final = (0, 255, 100) if is_nominal_valid(label_final) else (0, 165, 255)
-
-        cv2.putText(
-            frame,
-            f"Final   : {label_final}",
-            (x, y + 2 * jarak),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            warna_final,
-            1,
-            cv2.LINE_AA
-        )
-
-        sumber_y = y + 3 * jarak
-    else:
-        sumber_y = y + 2 * jarak
-
-    # Baris terakhir: Sumber
-    cv2.putText(
-        frame,
-        f"Sumber  : {sumber}",
-        (x, sumber_y),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        (210, 210, 210),
-        1,
-        cv2.LINE_AA
-    )
+    pass
 
 
 # ------------------------------------------------------------------ #

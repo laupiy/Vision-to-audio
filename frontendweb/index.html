@@ -53,20 +53,12 @@
                         </div>
                         <p>Kamera belum aktif</p>
                     </div>
-                    <!-- Guidelines / Overlay for Guide Mode -->
-                    <div class="guide-overlay" id="guide-overlay">
-                        <div class="guide-box"></div>
-                    </div>
                 </div>
 
                 <div class="camera-controls">
                     <button id="btn-toggle-camera" class="btn primary-btn">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"></path><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
                         <span>Nyalakan Kamera</span>
-                    </button>
-                    <button id="btn-toggle-mode" class="btn secondary-btn">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"></path><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-                        <span id="mode-text">Mode: Guide</span>
                     </button>
                 </div>
 
@@ -85,9 +77,15 @@
 
             <!-- Settings Section -->
             <section class="settings-section glass-panel">
-                <div class="settings-header">
-                    <h2>Pengaturan Deteksi</h2>
-                    <p class="settings-desc">Sesuaikan parameter untuk akurasi terbaik di lingkungan Anda.</p>
+                <div class="settings-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div>
+                        <h2>Pengaturan Deteksi</h2>
+                        <p class="settings-desc">Sesuaikan parameter untuk akurasi terbaik.</p>
+                    </div>
+                    <button id="btn-reset-settings" class="btn secondary-btn" style="padding: 0.5rem 1rem; font-size: 0.9rem;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+                        <span>Reset</span>
+                    </button>
                 </div>
 
                 <div class="sliders-container">
@@ -145,23 +143,36 @@
         </main>
 
         <!-- Result / Output Section -->
-        <section class="result-section glass-panel">
-            <div class="result-content">
-                <div class="audio-wave" id="audio-wave">
-                    <div class="bar"></div>
-                    <div class="bar"></div>
-                    <div class="bar"></div>
-                    <div class="bar"></div>
-                    <div class="bar"></div>
+        <section class="result-section glass-panel" style="flex-direction: column; align-items: stretch; gap: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div class="result-content">
+                    <div class="audio-wave" id="audio-wave">
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                    </div>
+                    <div class="detection-text">
+                        <h3>Hasil Deteksi:</h3>
+                        <p id="result-label" class="result-label-text">Belum ada deteksi</p>
+                    </div>
                 </div>
-                <div class="detection-text">
-                    <h3>Hasil Deteksi:</h3>
-                    <p id="result-label" class="result-label-text">Belum ada deteksi</p>
+                <button id="btn-replay-audio" class="btn icon-btn" title="Ulangi Audio">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                </button>
+            </div>
+            
+            <div class="dashboard-info" style="display: flex; gap: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1);">
+                <div style="flex: 1; background: rgba(0,0,0,0.3); padding: 0.8rem; border-radius: 12px;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 0.2rem;">HSV Warna Terdeteksi</span>
+                    <span id="hsv-value" style="font-family: monospace; font-size: 1.1rem; color: var(--accent-blue);">-</span>
+                </div>
+                <div style="flex: 1; background: rgba(0,0,0,0.3); padding: 0.8rem; border-radius: 12px;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 0.2rem;">Skor Fitur Template</span>
+                    <span id="template-score-value" style="font-family: monospace; font-size: 1.1rem; color: var(--accent-purple);">-</span>
                 </div>
             </div>
-            <button id="btn-replay-audio" class="btn icon-btn" title="Ulangi Audio">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
-            </button>
         </section>
     </div>
 

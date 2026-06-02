@@ -40,6 +40,8 @@ is_camera_on = False
 mode_roi = "GUIDE"
 current_label = "Kamera Mati"
 latest_frame_encoded = None
+current_hsv_raw = "-"
+current_score_raw = "-"
 state_lock = threading.Lock()
 
 web_params = {
@@ -149,6 +151,8 @@ def process_single_frame(frame):
         hasil_template = "Tidak ada template"
         skor_template = 0.0
         sumber = "Tidak yakin"
+        hsv_text = "-"
+        skor_text = "-"
 
         hasil_guide = roi_detector.ambil_roi_guide(frame_blur)
         if hasil_guide is not None:
@@ -159,13 +163,18 @@ def process_single_frame(frame):
     else:
         label_final, hasil_hsv, hasil_template, skor_template, sumber = \
             proses_roi_hybrid(roi, metode_tekstur)
+        
+        roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        mean_val = cv2.mean(roi_hsv)
+        hsv_text = f"H:{int(mean_val[0])} S:{int(mean_val[1])} V:{int(mean_val[2])}"
+        skor_text = f"{skor_template:.2f}"
 
     # Draw overlays
     ui.gambar_bounding_box(frame, bbox, label_final, is_fallback=is_fallback)
     ui.gambar_hud(frame, label_final, 0.0)
     ui.gambar_info_hybrid(frame, hasil_hsv, hasil_template, skor_template, sumber, label_final)
 
-    return label_final, frame
+    return label_final, frame, hsv_text, skor_text
 
 
 # ============================================================
@@ -250,6 +259,7 @@ def camera_loop():
             hasil_template = "Tidak ada template"
             skor_template = 0.0
             sumber = "Tidak yakin"
+            hsv_text = "-"
 
             hasil_guide = roi_detector.ambil_roi_guide(frame_blur)
             if hasil_guide is not None:
@@ -260,6 +270,10 @@ def camera_loop():
         else:
             label_final, hasil_hsv, hasil_template, skor_template, sumber = \
                 proses_roi_hybrid(roi, metode_tekstur)
+            
+            roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            mean_val = cv2.mean(roi_hsv)
+            hsv_text = f"H:{int(mean_val[0])} S:{int(mean_val[1])} V:{int(mean_val[2])}"
 
         # Drawing
         ui.gambar_bounding_box(frame, bbox, label_final, is_fallback=is_fallback)
@@ -277,6 +291,8 @@ def camera_loop():
                 speech.bicara_nominal(label_final)
 
             current_label = label_final
+            current_hsv_raw = hsv_text
+            current_score_raw = f"{skor_template:.2f}"
 
             ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
             if ret:
@@ -315,7 +331,11 @@ def video_feed():
 @app.route('/status')
 def get_status():
     with state_lock:
-        return jsonify({'label': current_label if is_camera_on else "Kamera Mati"})
+        return jsonify({
+            'label': current_label if is_camera_on else "Kamera Mati",
+            'hsv': current_hsv_raw if is_camera_on else "-",
+            'template_score': current_score_raw if is_camera_on else "-"
+        })
 
 @app.route('/toggle_camera', methods=['POST'])
 def toggle_camera():
@@ -378,7 +398,7 @@ def process_client_frame():
         if frame is None:
             return jsonify({'label': 'Frame error', 'frame': ''})
 
-        label_final, frame_annotated = process_single_frame(frame)
+        label_final, frame_annotated, hsv_val, skor_val = process_single_frame(frame)
 
         # Update global label & trigger TTS
         with state_lock:
@@ -395,6 +415,8 @@ def process_client_frame():
 
         return jsonify({
             'label': label_final,
+            'hsv': hsv_val,
+            'template_score': skor_val,
             'frame': 'data:image/jpeg;base64,' + encoded_frame
         })
 

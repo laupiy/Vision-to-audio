@@ -229,7 +229,6 @@ body {
 .guide-box {
     width: 60%;
     height: 60%;
-    border: 3px dashed rgba(255, 255, 255, 0.6);
     border-radius: 12px;
     box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
     transition: var(--transition);
