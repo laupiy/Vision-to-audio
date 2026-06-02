@@ -107,21 +107,33 @@ def preprocess_for_template(image):
     """
     Preprocessing khusus template matching.
     Fokusnya bukan warna, tapi bentuk angka/garis.
-    Output berupa edge image.
+    Output berupa edge image dengan Canny Adaptive.
     """
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image.copy()
 
+    # Perbaiki pencahayaan agar bentuk lebih menonjol
     clahe = cv2.createCLAHE(
         clipLimit=2.0,
         tileGridSize=(8, 8)
     )
     gray = clahe.apply(gray)
 
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    # Blur dikurangi sedikit agar angka tidak hilang
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    edges = cv2.Canny(gray, 50, 150)
+    # Adaptive Canny Thresholding untuk kondisi kurang cahaya
+    v = np.median(gray)
+    sigma = 0.33
+    lower = int(max(0, (1.0 - sigma) * v))
+    upper = int(min(255, (1.0 + sigma) * v))
+
+    edges = cv2.Canny(gray, lower, upper)
+
+    # Dilation untuk mempertebal garis tepi agar pencocokan lebih toleran
+    kernel = np.ones((2, 2), np.uint8)
+    edges = cv2.dilate(edges, kernel, iterations=1)
 
     return edges

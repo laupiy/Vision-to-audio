@@ -43,11 +43,21 @@ def hitung_skor_warna(hsv_roi: np.ndarray, nominal: dict) -> tuple[float, float]
         persentase : float — % piksel cocok sebelum pembobotan (0–100)
         skor_bobot : float — persentase × bobot (yang digunakan untuk ranking)
     """
-    # Buat mask piksel yang cocok range warna utama
-    mask = cv2.inRange(hsv_roi, nominal["lower1"], nominal["upper1"])
+    # Buat mask kosong terlebih dahulu
+    mask = np.zeros(hsv_roi.shape[:2], dtype=np.uint8)
+
+    # Tambahkan range warna dari dataset
+    for lower, upper in nominal.get("ranges", []):
+        current_mask = cv2.inRange(hsv_roi, lower, upper)
+        mask = cv2.bitwise_or(mask, current_mask)
+
+    # Tambahkan range manual jika ada
+    if "lower1" in nominal and nominal["lower1"] is not None:
+        mask1 = cv2.inRange(hsv_roi, nominal["lower1"], nominal["upper1"])
+        mask = cv2.bitwise_or(mask, mask1)
 
     # Jika ada range warna kedua (khusus merah), gabungkan dengan OR
-    if nominal["lower2"] is not None:
+    if "lower2" in nominal and nominal["lower2"] is not None:
         mask2 = cv2.inRange(hsv_roi, nominal["lower2"], nominal["upper2"])
         mask  = cv2.bitwise_or(mask, mask2)
 

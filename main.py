@@ -19,7 +19,6 @@ import base64
 import ssl
 import os
 from flask import Flask, Response, request, jsonify, send_from_directory
-
 from modules import config
 from modules import roi_detector
 from modules import color_detector
