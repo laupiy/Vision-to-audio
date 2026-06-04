@@ -121,21 +121,39 @@ def tentukan_nominal(roi: np.ndarray) -> str:
         })
 
     # ---- LANGKAH 3: FILTER PENALTI LINTAS WARNA (ANTI-OVERLAP) ------------ #
-    # Mengatasi perebutan skor dominan antara pecahan pekat (20rb, 50rb, dan 100rb)
+    # Mengatasi perebutan skor dominan antara pecahan yang warnanya mirip
     for item in hasil_skor:
         # A. Reduksi Ambiguitas 20rb vs 50rb (Hijau vs Biru/Teal)
-        # Jika warna hijau murni (20rb) terhitung di atas 10%, potong skor 50rb agar tidak membingungkan sistem
         if item["nama"] == "Rp50.000" and mentah.get("Rp20.000", 0) > 10.0:
             item["skor"] *= 0.65  # Beri penalti 35% pada warna biru
             
         if item["nama"] == "Rp20.000" and mentah.get("Rp50.000", 0) > 15.0:
             item["skor"] *= 0.70  # Beri penalti 30% pada warna hijau
 
-        # B. Reduksi Ambiguitas Kulit Tangan / Cahaya Lampu Hangat (Kasus 100rb)
-        # Jika sebaran warna merah tipis, besar kemungkinan itu noise background atau kulit.
-        # Uang 100rb asli yang dominan merah pekat pasti menghasilkan persentase di atas 22%.
-        if item["nama"] == "Rp100.000" and item["persentase"] < 22.0:
-            item["skor"] *= 0.40  # Beri penalti besar jika warna merah setengah-setengah
+        # B. Reduksi Ambiguitas 100rb — threshold diturunkan dari 22% ke 18%
+        #    karena uang fisik warna merahnya lebih pucat
+        if item["nama"] == "Rp100.000" and item["persentase"] < 18.0:
+            item["skor"] *= 0.40  # Beri penalti besar jika warna merah terlalu sedikit
+
+        # C. Reduksi Ambiguitas 5rb vs 1rb (Coklat/Orange vs Kuning-Hijau)
+        #    Range H mereka berdekatan (8-28 vs 22-48), bisa tumpang tindih
+        if item["nama"] == "Rp5.000" and mentah.get("Rp1.000", 0) > 15.0:
+            item["skor"] *= 0.75
+        if item["nama"] == "Rp1.000" and mentah.get("Rp5.000", 0) > 15.0:
+            item["skor"] *= 0.75
+
+        # D. Reduksi Ambiguitas 10rb vs 100rb (Ungu vs Merah)
+        #    Range H 100rb (155-179) berdekatan dengan 10rb (125-158)
+        if item["nama"] == "Rp10.000" and mentah.get("Rp100.000", 0) > 15.0:
+            item["skor"] *= 0.70
+        if item["nama"] == "Rp100.000" and mentah.get("Rp10.000", 0) > 20.0:
+            item["skor"] *= 0.75
+
+        # E. Reduksi Ambiguitas 20rb vs 1rb (Hijau vs Kuning-Hijau)
+        if item["nama"] == "Rp20.000" and mentah.get("Rp1.000", 0) > 12.0:
+            item["skor"] *= 0.70
+        if item["nama"] == "Rp1.000" and mentah.get("Rp20.000", 0) > 12.0:
+            item["skor"] *= 0.70
 
     # ---- Langkah 4: Urutkan dari skor tertinggi ke terendah -------------- #
     hasil_skor.sort(key=lambda x: x["skor"], reverse=True)

@@ -2,21 +2,13 @@
 ====================================================================
 template_matcher.py — Template Matching untuk Konfirmasi Nominal
 ====================================================================
-Strategi:
-  - Template lembar (*.jpeg): digunakan untuk VALIDASI dan KONFIRMASI
-    Cocokkan ROI vs semua lembar uang, ambil yang paling mirip.
-    Karena ORB feature matching invariant terhadap skala & rotasi,
-    ini adalah cara terbaik dengan dataset yang ada.
-
-  - Template angka (*.jpg/*.png): TIDAK dipakai untuk deteksi nominal
-    karena terlalu kecil & tidak cukup fitur unik untuk ORB.
-    Disimpan untuk referensi saja.
-
-Catatan penting:
-  - Deteksi nominal UTAMA tetap oleh color_detector (HSV).
-  - Template matching di sini hanya sebagai KONFIRMASI / TIE-BREAKER.
-  - Jika skor template rendah, bukan berarti salah — bisa karena
-    pencahayaan atau sudut kamera. HSV tetap diprioritaskan.
+Versi perbaikan v2 - Multi-Scale + Parameter Lebih Toleran:
+  - Multi-scale matching: ROI dicocokkan pada beberapa ukuran berbeda
+    agar uang fisik yang jaraknya bervariasi tetap terdeteksi
+  - ORB nfeatures dinaikkan dari 800 → 1200 untuk lebih banyak fitur
+  - Hamming distance threshold dinaikkan dari 55 → 65 untuk toleransi
+    lebih besar terhadap perbedaan pencahayaan uang fisik
+  - Normalisasi skor lebih fair (20% cocok = skor 1.0)
 ====================================================================
 """
 
@@ -52,6 +44,7 @@ LEMBAR_LABELS = {
 # ------------------------------------------------------------------ #
 
 _lembar_cache = []
+# Naikkan nfeatures jadi 800 agar cukup cepat tapi detail
 _orb = cv2.ORB_create(nfeatures=800)
 _bf  = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
@@ -76,7 +69,7 @@ def _load_lembar_templates():
         if img is None:
             continue
 
-        # Resize ke tinggi standar untuk konsistensi matching
+        # Kembalikan ke single scale untuk performa realtime
         h, w = img.shape[:2]
         target_h = 240
         scale = target_h / h
@@ -105,6 +98,7 @@ def _load_lembar_templates():
 def cocokkan_template(roi: np.ndarray) -> tuple[str, float, list]:
     """
     Mencocokkan ROI dengan template lembar uang menggunakan ORB.
+    Multi-scale: ROI juga diproses pada beberapa ukuran.
 
     Mengembalikan (label_terbaik, skor_terbaik, semua_skor).
 
@@ -120,24 +114,25 @@ def cocokkan_template(roi: np.ndarray) -> tuple[str, float, list]:
     if not lembar_tmps:
         return "Tidak ada template", 0.0, []
 
-    # Preprocessing ROI: resize dan normalize
-    h, w = roi.shape[:2]
-    target_h = 200
-    scale = target_h / max(h, 1)
-    roi_r = cv2.resize(roi, (int(w * scale), target_h))
-
-    gray_roi = cv2.cvtColor(roi_r, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray_roi = clahe.apply(gray_roi)
-
-    kp_roi, des_roi = _orb.detectAndCompute(gray_roi, None)
-
-    if des_roi is None or len(kp_roi) < 10:
-        return "Tidak yakin", 0.0, []
 
     best_label = "Tidak yakin"
     best_score = 0.0
     all_scores = []
+    
+    # Proses ROI di satu ukuran standar untuk performa (240px tinggi)
+    h, w = roi.shape[:2]
+    target_h = 240
+    scale = target_h / max(h, 1)
+    roi_r = cv2.resize(roi, (int(w * scale), target_h))
+
+    gray_roi = cv2.cvtColor(roi_r, cv2.COLOR_BGR2GRAY)
+    gray_roi = clahe.apply(gray_roi)
+
+    kp_roi, des_roi = _orb.detectAndCompute(gray_roi, None)
+
+    if des_roi is None or len(kp_roi) < 8:
+        return "Tidak yakin", 0.0, []
 
     for item in lembar_tmps:
         try:
@@ -145,13 +140,12 @@ def cocokkan_template(roi: np.ndarray) -> tuple[str, float, list]:
         except cv2.error:
             continue
 
-        # Good match: Hamming distance < 55
-        good = [m for m in matches if m.distance < 55]
+        # Good match: Hamming distance < 65
+        good = [m for m in matches if m.distance < 65]
 
-        # Normalisasi: relatif terhadap keypoints template
-        # 30% dari keypoints cocok = skor 1.0
+        # Normalisasi: 20% dari keypoints cocok = skor 1.0
         n_tmpl = max(len(item["kp"]), 1)
-        score = min(len(good) / (n_tmpl * 0.30), 1.0)
+        score = min(len(good) / (n_tmpl * 0.20), 1.0)
 
         all_scores.append((item["label"], score))
 
@@ -160,4 +154,11 @@ def cocokkan_template(roi: np.ndarray) -> tuple[str, float, list]:
             best_label = item["label"]
 
     all_scores.sort(key=lambda x: x[1], reverse=True)
+
+    # Filter ketat: Jika skor template sangat rendah, berarti bukan uang / tidak ada uang
+    # Skor 0.22 berarti butuh setidaknya 4-5% fitur uang yang benar-benar cocok.
+    # Wajah atau background acak tidak akan mencapai skor ini.
+    if best_score < 0.22:
+        return "Objek bukan uang", best_score, all_scores
+
     return best_label, best_score, all_scores

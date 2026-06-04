@@ -87,18 +87,105 @@ def denoise_image(image):
     return cv2.medianBlur(image, 3)
 
 
+# ------------------------------------------------------------------ #
+#  DETEKSI DIGITAL vs FISIK                                          #
+# ------------------------------------------------------------------ #
+
+def is_digital_source(roi):
+    """
+    Mendeteksi apakah ROI berasal dari layar digital (HP/monitor) atau
+    uang fisik nyata.
+
+    Layar digital memiliki ciri khas:
+    - Saturasi rata-rata tinggi dan seragam (layar menghasilkan warna pekat)
+    - Kontras/kecerahan sangat merata (backlight layar)
+    - Noise rendah (piksel layar sangat rapi)
+
+    Uang fisik ciri khas:
+    - Saturasi bervariasi (tergantung pencahayaan ruangan)
+    - Ada bayangan, lipatan, noise kamera
+    - Warna lebih kusam/pucat dibanding digital
+
+    Return: True jika kemungkinan besar dari layar digital
+    """
+    if roi is None or roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    s_channel = hsv[:, :, 1]
+    v_channel = hsv[:, :, 2]
+
+    mean_s = float(np.mean(s_channel))
+    std_s = float(np.std(s_channel))
+    mean_v = float(np.mean(v_channel))
+    std_v = float(np.std(v_channel))
+
+    # Layar digital: saturasi tinggi + seragam, kecerahan tinggi + seragam
+    # Uang fisik: saturasi lebih rendah dan bervariasi
+    is_high_saturation = mean_s > 80
+    is_uniform_saturation = std_s < 45
+    is_bright = mean_v > 130
+    is_uniform_brightness = std_v < 50
+
+    # Hitung skor digital (semakin tinggi = semakin yakin digital)
+    score = 0
+    if is_high_saturation:
+        score += 1
+    if is_uniform_saturation:
+        score += 1
+    if is_bright:
+        score += 1
+    if is_uniform_brightness:
+        score += 1
+
+    # Minimal 3 dari 4 ciri harus terpenuhi
+    return score >= 3
+
+
+# ------------------------------------------------------------------ #
+#  PIPELINE PREPROCESSING UTAMA (ADAPTIF)                            #
+# ------------------------------------------------------------------ #
+
 def preprocess_roi(roi):
     """
-    Pipeline preprocessing utama.
-    Dipakai sebelum HSV detection dan template matching.
+    Pipeline preprocessing utama dengan deteksi adaptif.
+    - Jika sumber digital: preprocessing ringan (sudah saturated)
+    - Jika sumber fisik: preprocessing lebih kuat untuk normalisasi warna
     """
     processed = roi.copy()
 
-    processed = gray_world_white_balance(processed)
-    processed = gamma_correction(processed, gamma=1.25)
-    processed = apply_clahe_hsv(processed)
-    processed = boost_saturation(processed, factor=1.20)
-    processed = denoise_image(processed)
+    digital = is_digital_source(roi)
+
+    if digital:
+        # --- Mode Digital ---
+        # Warna sudah bagus, hanya perlu sedikit normalisasi
+        processed = gray_world_white_balance(processed)
+        processed = gamma_correction(processed, gamma=1.15)  # Lebih ringan
+        processed = apply_clahe_hsv(processed)
+        # Saturation boost minimal karena sudah saturated
+        processed = boost_saturation(processed, factor=1.05)
+        processed = denoise_image(processed)
+    else:
+        # --- Mode Fisik ---
+        # Warna pucat/kusam, perlu normalisasi lebih agresif
+        # tapi JANGAN over-boost saturasi karena bisa shift hue
+
+        # 1. White balance lebih kuat
+        processed = gray_world_white_balance(processed)
+
+        # 2. Gamma sedikit lebih tinggi untuk mencerahkan
+        processed = gamma_correction(processed, gamma=1.35)
+
+        # 3. CLAHE untuk meratakan pencahayaan
+        processed = apply_clahe_hsv(processed)
+
+        # 4. Saturasi boost MODERAT
+        #    Terlalu tinggi akan menggeser hue dan merusak deteksi
+        #    Terlalu rendah tidak akan membantu warna pucat
+        processed = boost_saturation(processed, factor=1.30)
+
+        # 5. Denoise sedikit lebih kuat untuk fisik (noise kamera)
+        processed = denoise_image(processed)
 
     return processed
 

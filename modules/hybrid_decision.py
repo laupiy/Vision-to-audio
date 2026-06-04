@@ -2,13 +2,11 @@
 ====================================================================
 hybrid_decision.py — Penggabungan Keputusan HSV + Template Matching
 ====================================================================
-Versi perbaikan:
-- Threshold disesuaikan dengan skor cv2.matchTemplate (TM_CCOEFF_NORMED)
-  yang berkisar 0.0 - 1.0, bukan skor ORB lama.
-- Template dengan skor >= 0.55 dianggap kuat (bisa override HSV)
-- Template dengan skor >= 0.35 dianggap sedang (konfirmasi saja)
-- Jika HSV dan Template sama → langsung percaya (tidak perlu threshold tinggi)
-- Jika konflik → HSV diprioritaskan kecuali template sangat kuat
+Versi perbaikan v2:
+- Lebih percaya template saat HSV tidak yakin (untuk uang fisik)
+- Template SEDANG + HSV tidak yakin → percaya template (bukan reject)
+- Saat konflik, pertimbangkan kedua skor sebelum memutuskan
+- Tetap konservatif untuk Rp2.000 (false positive tinggi)
 ====================================================================
 """
 
@@ -25,6 +23,9 @@ THRESHOLD_TEMPLATE_SEDANG = 0.35
 
 # Threshold koreksi khusus Rp2.000 (abu-abu rawan false positive)
 THRESHOLD_KOREKSI_RP2000 = 0.45
+
+# Threshold baru: template sedang-kuat (bisa dipercaya saat HSV gagal)
+THRESHOLD_TEMPLATE_SEDANG_KUAT = 0.42
 
 
 # ------------------------------------------------------------------ #
@@ -80,14 +81,15 @@ def gabungkan_keputusan(
     """
     Menggabungkan hasil HSV dan Template Matching.
 
-    Prioritas keputusan:
+    Prioritas keputusan (v2 - lebih percaya template):
     1. Jika keduanya sama → langsung percaya (sumber: HSV + Template cocok)
-    2. Jika HSV tidak yakin tapi template kuat → pakai template
+    2. Jika HSV tidak yakin tapi template kuat/sedang-kuat → pakai template
     3. Jika HSV yakin tapi template tidak tersedia → pakai HSV
        (kecuali Rp2.000 karena abu-abu rawan false positive)
     4. Jika konflik HSV vs Template:
        - Template kuat (>= 0.55) → pakai template
-       - Template sedang (0.35-0.54) → tidak yakin (butuh kepastian lebih)
+       - Template sedang-kuat (>= 0.42) → cek konteks, bisa pakai template
+       - Template sedang (0.35-0.41) → tidak yakin
        - Template lemah → pakai HSV
     5. Rp2.000 dari HSV selalu butuh dukungan template (>= 0.45)
     """
@@ -100,6 +102,12 @@ def gabungkan_keputusan(
     template_tidak_yakin = hasil_template in LABEL_TIDAK_YAKIN_TEMPLATE
     hsv_tidak_yakin = hasil_hsv in LABEL_TIDAK_YAKIN_HSV
     status = status_template(skor_template)
+
+    # -------------------------------------------------------------- #
+    # 0. STRICT FILTER: Jika template yakin ini bukan uang           #
+    # -------------------------------------------------------------- #
+    if hasil_template == "Objek bukan uang":
+        return "Objek bukan uang", "Template sangat rendah (Bukan uang)"
 
     # -------------------------------------------------------------- #
     # 1. Keduanya tidak yakin                                        #
@@ -131,11 +139,21 @@ def gabungkan_keputusan(
 
     # -------------------------------------------------------------- #
     # 4. HSV tidak yakin, gunakan template jika cukup kuat           #
+    #    PERBAIKAN: template sedang-kuat sekarang bisa dipercaya     #
     # -------------------------------------------------------------- #
     if hsv_tidak_yakin:
         if skor_template >= THRESHOLD_TEMPLATE_KUAT:
             return hasil_template, "Template kuat"
+        # BARU: Template sedang-kuat (>= 0.42) sekarang dipercaya
+        # Ini penting untuk uang fisik dimana HSV sering gagal
+        # tapi template masih bisa mengenali pola uang
+        if skor_template >= THRESHOLD_TEMPLATE_SEDANG_KUAT:
+            # Rp2.000 tetap harus hati-hati
+            if hasil_template == "Rp2.000":
+                return "Tidak yakin", "Rp2.000 template sedang, perlu konfirmasi"
+            return hasil_template, "Template sedang-kuat (HSV gagal)"
         if skor_template >= THRESHOLD_TEMPLATE_SEDANG:
+            # Template sedang biasa, masih belum cukup yakin
             return "Tidak yakin", f"Template sedang, HSV tidak yakin"
         return "Tidak yakin", "Template lemah, HSV tidak yakin"
 
@@ -152,6 +170,11 @@ def gabungkan_keputusan(
         # Nominal lain: template kuat bisa menang
         if skor_template >= THRESHOLD_TEMPLATE_KUAT:
             return hasil_template, "Template kuat override HSV"
+
+        # BARU: Template sedang-kuat + konflik → masih bisa percaya template
+        # Karena untuk uang fisik, HSV bisa salah tapi template lebih stabil
+        if skor_template >= THRESHOLD_TEMPLATE_SEDANG_KUAT:
+            return hasil_template, "Template sedang-kuat override HSV"
 
         # Template sedang tapi berbeda: tidak yakin
         if skor_template >= THRESHOLD_TEMPLATE_SEDANG:

@@ -34,16 +34,16 @@ import numpy as np
 # ------------------------------------------------------------------ #
 
 # Batas minimum edge density agar objek dianggap bertekstur cukup
-# (seperti uang kertas). Nilai 0.04 artinya minimal 4% piksel adalah tepi.
-EDGE_DENSITY_MIN = 0.012
+# (seperti uang kertas). Ditingkatkan ke 0.025 (2.5%) agar wajah tidak lolos.
+EDGE_DENSITY_MIN = 0.025
 
 # Batas minimum standar deviasi Saturation (S) pada HSV.
 # Uang kertas memiliki variasi saturasi yang cukup tinggi.
-STD_SATURATION_MIN = 10.0
+STD_SATURATION_MIN = 15.0
 
 # Batas minimum standar deviasi Value (V) pada HSV.
 # Uang kertas memiliki variasi kecerahan karena detail gambar dan teks.
-STD_VALUE_MIN = 8.0
+STD_VALUE_MIN = 12.0
 
 # Batas minimum rectangularity (luas kontur / luas bounding box).
 # Nilai 0.6 artinya minimal 60% bounding box terisi oleh kontur.

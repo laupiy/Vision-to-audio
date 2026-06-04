@@ -287,8 +287,9 @@ def camera_loop():
         waktu_fps_sebelumnya = waktu_sekarang
 
         with state_lock:
-            if current_label != label_final and label_final not in STATUS_NON_NOMINAL:
-                speech.bicara_nominal(label_final)
+            # Setiap frame, kirim label ke speech module
+            # Speech module akan mengelola capture window + validasi internal
+            speech.bicara_nominal(label_final)
 
             current_label = label_final
             current_hsv_raw = hsv_text
@@ -402,8 +403,9 @@ def process_client_frame():
 
         # Update global label & trigger TTS
         with state_lock:
-            if current_label != label_final and label_final not in STATUS_NON_NOMINAL:
-                speech.bicara_nominal(label_final)
+            # Setiap frame, kirim label ke speech module
+            # Speech module akan mengelola capture window + validasi internal
+            speech.bicara_nominal(label_final)
             current_label = label_final
 
         # Encode annotated frame back to base64 JPEG
